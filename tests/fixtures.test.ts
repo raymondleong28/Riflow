@@ -18,10 +18,14 @@ import {
   computePartnerKpis,
   canPartnerAccessAsset,
   computeAccountOverlaps,
-  getPartnerLeadFormToken,
+  generateRandomLeadFormToken,
+  hashLeadFormToken,
   resolvePartnerByLeadFormToken,
+  resolveExplicitProgramAndPipeline,
   buildScheduledPayoutBatches,
   evaluateOnboardingStageCompletion,
+  toMajorUnits,
+  toMinorUnits,
 } from "../src/lib/prmEngine";
 import {
   loadAndValidateConnectorConfig,
@@ -37,6 +41,7 @@ import {
 import {
   hashPasswordWithRandomSalt,
   verifyPasswordWithStoredSalt,
+  authenticateUserFromDatabase,
   createServerSessionRow,
   getActiveServerSession,
   revokeServerSessionById,
@@ -45,7 +50,11 @@ import {
   checkRateLimitKey,
   recordAuthFailure,
   resetRateLimitKey,
+  clearInMemoryRateLimitCache,
 } from "../src/lib/authSession";
+import { seedDatabase } from "../prisma/seed";
+import { POST as authPost } from "../src/app/api/auth/route";
+import { GET as setupGet, POST as setupPost } from "../src/app/api/setup/route";
 import {
   matchAccountListsByDomainAndName,
   handleCsvImportMutation,
@@ -54,7 +63,32 @@ import {
 async function runFixtures() {
   console.log("Running R-PRM Known-Answer Fixtures...");
 
-  // 1. Database baseline fixtures (Transactions & Deals)
+  // Ensure baseline demo dataset is present when running against an empty database (e.g. fresh-clone check)
+  const existingPartnersCount = await prisma.partner.count();
+  if (existingPartnersCount === 0) {
+    await seedDatabase({ forceReset: true });
+  } else {
+    // Backfill random lead-form tokens if any pre-migration partner row lacks one
+    const missingTokenPartners = await prisma.partner.findMany({
+      where: { leadFormTokenHash: null },
+    });
+    for (const mp of missingTokenPartners) {
+      const lf = generateRandomLeadFormToken();
+      await prisma.partner.update({
+        where: { id: mp.id },
+        data: {
+          leadFormTokenHash: lf.tokenHash,
+          leadFormTokenCipher: encryptBankDetails(lf.rawToken),
+        },
+      });
+    }
+    await prisma.program.updateMany({
+      where: { id: "prog-referral" },
+      data: { onboardingPipelineId: "Fast-Track Referral" },
+    });
+  }
+
+  // 1. Database baseline fixtures (Transactions & Deals in integer minor units / cents — F6)
   const [transactions, deals, partners, leads, rewards, manageItems, accounts] =
     await Promise.all([
       prisma.transaction.findMany(),
@@ -66,16 +100,19 @@ async function runFixtures() {
       prisma.accountRecord.findMany(),
     ]);
 
-  // Fixture 1: Baseline 6 seed transactions total = SGD 82,100
+  // Fixture 1: Baseline 6 seed transactions total = SGD 82,100 (8,210,000 minor units / cents)
   const seedTxIds = ["tx-1", "tx-2", "tx-3", "tx-4", "tx-5", "tx-6"];
   const seedTxs = transactions.filter((t) => seedTxIds.includes(t.id));
-  const txSum = seedTxs.reduce((acc, t) => acc + t.amountSgd, 0);
+  const txSumMinor = seedTxs.reduce((acc, t) => acc + t.amountSgd, 0);
   assert.equal(
-    txSum,
-    82100,
-    `Fixture 1 failed: expected baseline transactions sum 82100, got ${txSum}`
+    txSumMinor,
+    toMinorUnits(82100),
+    `Fixture 1 failed: expected baseline transactions sum 8210000 minor units (SGD 82,100), got ${txSumMinor}`
   );
-  console.log("✓ Fixture 1 passed: Baseline transactions chart total = SGD 82,100");
+  assert.equal(toMajorUnits(txSumMinor), 82100);
+  console.log(
+    "✓ Fixture 1 passed: Baseline transactions chart total = SGD 82,100 (8,210,000 minor units)"
+  );
 
   // Fixture 2: Baseline 10 seed deals -> 10 registered, 2 won, 1 lost
   const seedDealIds = [
@@ -279,22 +316,27 @@ async function runFixtures() {
   );
   console.log("✓ Fixture 6 passed (D11): Account overlaps computed from account names");
 
-  // Fixture 7 (§13.1 & §13.7 #4): Partner tier level reward generation — Apex Platinum (25% + 5%) on SGD 28,500 (tx-1) -> SGD 7,125 and SGD 1,425
+  // Fixture 7 (§13.1, §13.7 #4 & F6): Partner tier level reward generation — Apex Platinum (25% + 5%) on SGD 28,500 (tx-1) -> SGD 7,125 (712,500 minor) and SGD 1,425 (142,500 minor)
   const apexTx1Rewards = rewards.filter(
     (r) =>
       r.partnerName.includes("Apex") &&
-      (r.fromActivity.includes("INV-2026-901") || r.amountSgd === 7125 || r.amountSgd === 1425)
+      (r.fromActivity.includes("INV-2026-901") ||
+        r.amountSgd === toMinorUnits(7125) ||
+        r.amountSgd === toMinorUnits(1425))
   );
-  const amounts = apexTx1Rewards.map((r) => r.amountSgd).sort((a, b) => b - a);
+  const amountsMinor = apexTx1Rewards
+    .map((r) => r.amountSgd)
+    .sort((a, b) => b - a);
   assert.deepEqual(
-    amounts,
-    [7125, 1425],
-    `Expected Apex Platinum (25% + 5%) rewards on SGD 28,500 tx-1 to be [7125, 1425], got ${JSON.stringify(
-      amounts
+    amountsMinor,
+    [toMinorUnits(7125), toMinorUnits(1425)],
+    `Expected Apex Platinum (25% + 5%) rewards on SGD 28,500 tx-1 to be [712500, 142500] minor units, got ${JSON.stringify(
+      amountsMinor
     )}`
   );
+  assert.deepEqual(amountsMinor.map(toMajorUnits), [7125, 1425]);
   console.log(
-    "✓ Fixture 7 passed (§13.1): Apex Platinum (25% + 5%) on SGD 28,500 produces SGD 7,125 and SGD 1,425"
+    "✓ Fixture 7 passed (§13.1 & F6): Apex Platinum (25% + 5%) on SGD 28,500 produces SGD 7,125 (712,500 cents) and SGD 1,425 (142,500 cents)"
   );
 
   // Fixture 8 (§13.1 & §13.7 #1): Unified store — Program.levelsJson in SQLite holds normalized StructuredRewardRule objects
@@ -327,11 +369,25 @@ async function runFixtures() {
     `✓ Fixture 9 passed (§13.1): AuditLog table contains ${auditLogs.length} real entries`
   );
 
-  // Fixture 10 (§13.1 & §13.7 #5): Unguessable public lead form token resolves partner; raw "prt-1" or invalid token returns null
-  const apexLeadToken = getPartnerLeadFormToken("prt-1");
+  // Fixture 10 (§13.1, §13.7 #5 & F2): Non-derivable random hashed public lead-form token resolves partner, rotates cleanly, and rejects raw "prt-1"
+  const apexRow = await prisma.partner.findUnique({ where: { id: "prt-1" } });
+  assert.ok(apexRow?.leadFormTokenHash, "Partner prt-1 must store a hashed leadFormTokenHash");
+  const apexLeadToken = decryptBankDetails(apexRow.leadFormTokenCipher);
   assert.ok(
-    apexLeadToken.startsWith("lf_") && apexLeadToken.length === 27,
-    `Expected unguessable lead form token lf_<24-hex>, got ${apexLeadToken}`
+    apexLeadToken.startsWith("lf_") && apexLeadToken.length >= 19,
+    `Expected random lead form token lf_<hex>, got ${apexLeadToken}`
+  );
+  assert.equal(
+    hashLeadFormToken(apexLeadToken),
+    apexRow.leadFormTokenHash,
+    "Stored leadFormTokenHash must match hashLeadFormToken(rawToken)"
+  );
+  // Prove non-derivability: generating another token produces a different random value
+  const rotatedToken = generateRandomLeadFormToken();
+  assert.notEqual(
+    rotatedToken.rawToken,
+    apexLeadToken,
+    "Lead-form tokens must be random and not deterministically derived from partnerId (F2)"
   );
   const resolvedApex = resolvePartnerByLeadFormToken(apexLeadToken, partners);
   assert.equal(resolvedApex?.id, "prt-1", "Valid lead token must resolve prt-1");
@@ -346,7 +402,7 @@ async function runFixtures() {
     "Unknown token must return null"
   );
   console.log(
-    `✓ Fixture 10 passed (§13.1): Unguessable lead token (${apexLeadToken}) resolves partner and rejects raw 'prt-1'`
+    `✓ Fixture 10 passed (F2): Random hashed lead-form token (${apexLeadToken}) is non-derivable from partnerId, resolves partner, and rejects raw 'prt-1'`
   );
 
   // Fixture 11 (§13.2 & §13.5): Connector fail-closed validation, TOTP MFA verification, and AES-256-GCM bank details encryption
@@ -1144,17 +1200,23 @@ async function runFixtures() {
     "✓ Fixture 28 passed (§16.2 S11 / §16.3 G2): Email HTML escapes <script> and EMAIL_DRIVER=smtp delivers over SMTP protocol"
   );
 
-  // Fixture 29 (§16.2 S13): Rate limiting & lockout after repeated bad login attempts
+  // Fixture 29 (§16.2 S13 & F7): Database-backed rate limiting & lockout survives server restart
   const rlKey = "test-rate-limit-fixture-key";
-  resetRateLimitKey(rlKey);
+  await resetRateLimitKey(rlKey);
   for (let i = 0; i < 8; i++) {
-    recordAuthFailure(rlKey);
+    await recordAuthFailure(rlKey);
   }
-  const rlCheck = checkRateLimitKey(rlKey);
-  assert.equal(rlCheck.allowed, false, "8 failed login attempts must trigger temporary lockout");
-  resetRateLimitKey(rlKey);
+  // Clear in-memory cache to simulate a server restart (F7)
+  clearInMemoryRateLimitCache();
+  const rlCheckAfterRestart = await checkRateLimitKey(rlKey);
+  assert.equal(
+    rlCheckAfterRestart.allowed,
+    false,
+    "8 failed login attempts must remain locked out in PostgreSQL even after in-memory restart (F7)"
+  );
+  await resetRateLimitKey(rlKey);
   console.log(
-    "✓ Fixture 29 passed (§16.2 S13): Rate limiter locks out after repeated failed attempts"
+    "✓ Fixture 29 passed (§16.2 S13 & F7): Database-backed login lockout survives server restart"
   );
 
   // Fixture 30 (§16.4 P1, P4, G9): Payout amounts equal sum of linked rewards (>0 rewards), two-list CSV account matching, and CSV import dry-run
@@ -1213,7 +1275,197 @@ async function runFixtures() {
     "✓ Fixture 30 passed (§16.4 P1/P4 & §16.3 G9): Payout amounts equal linked rewards sum, two-list CSV matcher computes domain/name overlaps, and CSV dry-run reports row errors"
   );
 
-  console.log("\nALL 30 KNOWN-ANSWER & GO-LIVE READINESS FIXTURES PASSED GREEN!");
+  // Fixture 31 (F1, F3, F4, F5, F6, F8 & §3.2): Enforce MFA when required, fail closed without APP_BASE_URL in production, block test accounts in production without flag, fail closed on saml/fx api even with keys, verify integer minor units schema, verify explicit program->pipeline assignment, and verify /setup lock
+  // F3: Production start without APP_BASE_URL fails closed
+  assert.throws(
+    () =>
+      loadRequiredConfig({
+        NODE_ENV: "production",
+        SESSION_SECRET: "0123456789abcdef0123456789abcdef0123456789abcdef",
+        BANK_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef",
+        APP_BASE_URL: "",
+      }),
+    /FAIL_CLOSED: APP_BASE_URL is required when NODE_ENV=production/,
+    "Production start without APP_BASE_URL must fail closed (F3)"
+  );
+
+  // F5: SSO saml and FX api fail closed even when credentials are supplied
+  assert.throws(
+    () =>
+      loadAndValidateConnectorConfig({
+        FX_DRIVER: "api",
+        FX_API_KEY: "some-fx-key",
+      }),
+    /FAIL_CLOSED/,
+    "Selecting FX_DRIVER=api must fail closed until implemented (F5)"
+  );
+  assert.throws(
+    () =>
+      loadAndValidateConnectorConfig({
+        SSO_DRIVER: "saml",
+        SAML_IDP_LOGIN_URL: "https://idp.example.com/sso",
+        SAML_IDP_CERT: "CERT",
+      }),
+    /FAIL_CLOSED/,
+    "Selecting SSO_DRIVER=saml must fail closed until implemented (F5)"
+  );
+
+  // F6: Verify zero Float money columns exist in PostgreSQL information_schema
+  const floatMoneyCols = await prisma.$queryRawUnsafe<
+    Array<{ table_name: string; column_name: string; data_type: string }>
+  >(`
+    SELECT table_name, column_name, data_type
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND column_name IN ('amount', 'amountSgd', 'revenuesSgd', 'targetRevSgd', 'pendingRewardsAll', 'sourcedRevenue365d', 'influencedRev365d')
+      AND data_type != 'integer'
+  `);
+  assert.equal(
+    floatMoneyCols.length,
+    0,
+    `Expected 0 non-integer money columns in PostgreSQL, found ${JSON.stringify(
+      floatMoneyCols
+    )}`
+  );
+
+  // F8: Explicit program -> onboarding pipeline assignment; missing or unknown program throws
+  assert.throws(
+    () => resolveExplicitProgramAndPipeline({}, programs),
+    /Explicit programId or programName is required/,
+    "Missing program must throw error instead of defaulting to first program (F8)"
+  );
+  assert.throws(
+    () =>
+      resolveExplicitProgramAndPipeline(
+        { programId: "non-existent-prog" },
+        programs
+      ),
+    /Program not found/,
+    "Unknown program must throw error instead of defaulting to first program (F8)"
+  );
+  const resolvedRefProg = resolveExplicitProgramAndPipeline(
+    { programId: "prog-referral" },
+    programs
+  );
+  assert.equal(resolvedRefProg.onboardingPipeline, "Fast-Track Referral");
+
+  // F4: Test accounts are always blocked in production without BLOCK_TEST_ACCOUNTS flag
+  const prevNodeEnv = process.env.NODE_ENV;
+  (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+  try {
+    const prodTestAuth = await authenticateUserFromDatabase(
+      "alex@r-prm.example.com",
+      process.env.SEED_ADMIN_PASSWORD || "",
+      "coworker",
+      "127.0.0.1"
+    );
+    assert.equal(
+      prodTestAuth.ok,
+      false,
+      "Test account must be blocked in production unconditionally (F4)"
+    );
+  } finally {
+    (process.env as Record<string, string | undefined>).NODE_ENV = prevNodeEnv;
+  }
+
+  // F1: MFA required + no code -> login refused (and first-login enrolment issued if no secret yet)
+  const enrolledForAlex = enrollTotpMfa(alexUser.email);
+  await prisma.user.update({
+    where: { id: alexUser.id },
+    data: {
+      mfaSecret: enrolledForAlex.secret,
+      recoveryCodesJson: JSON.stringify(enrolledForAlex.recoveryCodes),
+    },
+  });
+  // Ensure requireMfaCoworkers is true in account_settings
+  const currentAcctRow = await prisma.appSetting.findUnique({
+    where: { key: "account_settings" },
+  });
+  const currentAcctObj = currentAcctRow
+    ? JSON.parse(currentAcctRow.valueJson)
+    : {};
+  await prisma.appSetting.upsert({
+    where: { key: "account_settings" },
+    update: {
+      valueJson: JSON.stringify({
+        ...currentAcctObj,
+        requireMfaCoworkers: true,
+      }),
+    },
+    create: {
+      key: "account_settings",
+      valueJson: JSON.stringify({
+        ...currentAcctObj,
+        requireMfaCoworkers: true,
+      }),
+    },
+  });
+
+  // Attempt login via POST /api/auth WITHOUT mfaCode -> must return 401
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const loginNoMfaReq: any = {
+    headers: new Headers({ "content-type": "application/json" }),
+    json: async () => ({
+      identityType: "coworker",
+      email: alexUser.email,
+      password: process.env.SEED_ADMIN_PASSWORD,
+    }),
+  };
+  const loginNoMfaRes = await authPost(loginNoMfaReq);
+  assert.equal(
+    loginNoMfaRes.status,
+    401,
+    "When MFA is required and no code is supplied, login must be refused with 401 (F1)"
+  );
+
+  // Attempt login WITH valid TOTP code -> must return 200
+  const validAlexTotp = generateTotpCode(enrolledForAlex.secret);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const loginWithMfaReq: any = {
+    headers: new Headers({ "content-type": "application/json" }),
+    json: async () => ({
+      identityType: "coworker",
+      email: alexUser.email,
+      password: process.env.SEED_ADMIN_PASSWORD,
+      mfaCode: validAlexTotp,
+    }),
+  };
+  const loginWithMfaRes = await authPost(loginWithMfaReq);
+  assert.equal(
+    loginWithMfaRes.status,
+    200,
+    "When MFA is required and valid TOTP code is supplied, login must succeed (F1)"
+  );
+
+  // §3.2: /setup refuses once an Administrator exists
+  const setupStatusRes = await setupGet();
+  const setupStatusJson = await setupStatusRes.json();
+  assert.equal(
+    setupStatusJson.needsSetup,
+    false,
+    "/api/setup must report needsSetup=false when an admin exists"
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const setupAttemptReq: any = {
+    json: async () => ({
+      workspaceName: "Attacker Claim",
+      adminName: "Attacker",
+      adminEmail: "attacker@evil.com",
+      adminPassword: "AttackerPassword123!",
+    }),
+  };
+  const setupAttemptRes = await setupPost(setupAttemptReq);
+  assert.equal(
+    setupAttemptRes.status,
+    403,
+    "POST /api/setup must refuse with 403 once any Administrator exists (§3.2)"
+  );
+
+  console.log(
+    "✓ Fixture 31 passed (F1, F3, F4, F5, F6, F8 & §3.2): Enforced MFA, production APP_BASE_URL & test-account blocks, fail-closed drivers, integer minor-unit columns, explicit pipeline binding, and /setup lock verified"
+  );
+
+  console.log("\nALL 31 KNOWN-ANSWER & GO-LIVE READINESS FIXTURES PASSED GREEN!");
   await prisma.$disconnect();
 }
 

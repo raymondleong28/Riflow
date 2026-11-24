@@ -101,15 +101,14 @@ export function loadAndValidateConnectorConfig(
       "FAIL_CLOSED: HUBSPOT_DRIVER=live is not enabled without verified Eber HubSpot Private App (use HUBSPOT_DRIVER=mock)"
     );
   }
-  if (cfg.FX_DRIVER === "api" && !cfg.FX_API_KEY) {
-    throw new Error("FAIL_CLOSED: FX_DRIVER=api requires FX_API_KEY");
-  }
-  if (
-    cfg.SSO_DRIVER === "saml" &&
-    (!cfg.SAML_IDP_LOGIN_URL || !cfg.SAML_IDP_CERT)
-  ) {
+  if (cfg.FX_DRIVER === "api") {
     throw new Error(
-      "FAIL_CLOSED: SSO_DRIVER=saml requires SAML_IDP_LOGIN_URL and SAML_IDP_CERT"
+      "FAIL_CLOSED: FX_DRIVER=api exchange-rate API driver is not implemented yet (use FX_DRIVER=table)"
+    );
+  }
+  if (cfg.SSO_DRIVER === "saml") {
+    throw new Error(
+      "FAIL_CLOSED: SSO_DRIVER=saml SAML 2.0 driver is not implemented yet (use SSO_DRIVER=local)"
     );
   }
 

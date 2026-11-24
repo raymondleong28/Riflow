@@ -657,7 +657,31 @@ export default function PartnerDetailPage() {
 
             {activeTab === "Links" && (
               <div className="space-y-3 text-xs">
-                <h3 className="font-bold text-sm text-slate-900">
+                <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-bold text-blue-900">
+                      Personal Lead Submission Form (Rotatable Token)
+                    </p>
+                    <p className="font-mono text-blue-700 mt-0.5">
+                      /forms/lead/{partner.leadFormToken || "(not generated)"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      mutate(
+                        "ROTATE_PARTNER_LEAD_TOKEN",
+                        { partnerId: partner.id },
+                        `Rotated lead-form token for ${partner.name}`
+                      )
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                  >
+                    Rotate Lead-Form Token
+                  </button>
+                </div>
+
+                <h3 className="font-bold text-sm text-slate-900 pt-2">
                   Referral Tracking Links
                 </h3>
                 {partnerLinks.map((l) => (

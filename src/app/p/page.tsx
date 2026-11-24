@@ -8,7 +8,6 @@ import { StatusBadge } from "@/components/SharedEngines";
 import {
   canPartnerAccessAsset,
   getPartnerLevelRules,
-  getPartnerLeadFormToken,
 } from "@/lib/prmEngine";
 import {
   Award,
@@ -111,9 +110,7 @@ function StandalonePartnerPortalContent() {
       ? levelRules.map((r) => r.title).join(" + ")
       : "Standard Tier Commission";
 
-  const personalLeadFormUrl = `/forms/lead/${
-    partner.leadFormToken || getPartnerLeadFormToken(partner.id)
-  }`;
+  const personalLeadFormUrl = `/forms/lead/${partner.leadFormToken || ""}`;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let perms: Record<string, Record<string, any>> = {};

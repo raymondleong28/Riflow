@@ -2,6 +2,7 @@ import { prisma } from "../src/lib/prisma";
 import {
   normalizeRewardRule,
   generateRewardsFromPartnerLevel,
+  toMajorUnits,
 } from "../src/lib/prmEngine";
 
 async function syncSingleStore() {
@@ -52,7 +53,7 @@ async function syncSingleStore() {
       {
         id: tx.id,
         name: tx.name,
-        amount: tx.amount,
+        amount: toMajorUnits(tx.amount),
         currency: tx.currency,
         partnerName: tx.partnerName,
       },
@@ -70,9 +71,9 @@ async function syncSingleStore() {
           partnerName: g.partnerName,
           recipientName: g.recipientName,
           type: g.type,
-          amount: g.amount,
+          amount: g.amountMinor,
           currency: g.currency,
-          amountSgd: g.amountSgd,
+          amountSgd: g.amountSgdMinor,
           fromActivity: g.fromActivity,
           fromRewardRule: g.fromRewardRule,
           status: isPaidTx ? "Paid" : isBatchReadyTx ? "Accepted" : "Pending",
@@ -162,7 +163,7 @@ async function syncSingleStore() {
     `Done! Generated ${allRewards.length} tier-accurate rewards. Apex rewards on tx-1:`,
     allRewards
       .filter((r) => r.partnerName.includes("Apex"))
-      .map((r) => `${r.rewardNumber}: SGD ${r.amountSgd} (${r.fromRewardRule})`)
+      .map((r) => `${r.rewardNumber}: SGD ${toMajorUnits(r.amountSgd)} (${r.fromRewardRule})`)
   );
   await prisma.$disconnect();
 }

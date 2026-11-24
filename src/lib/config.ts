@@ -31,9 +31,13 @@ export function loadRequiredConfig(
     );
   }
 
-  const appBaseUrl = (env.APP_BASE_URL || "http://127.0.0.1:3000")
-    .trim()
-    .replace(/\/+$/, "");
+  const rawBaseUrl = (env.APP_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (env.NODE_ENV === "production" && !rawBaseUrl) {
+    throw new Error(
+      "FAIL_CLOSED: APP_BASE_URL is required when NODE_ENV=production"
+    );
+  }
+  const appBaseUrl = rawBaseUrl || "http://127.0.0.1:3000";
 
   return {
     sessionSecret,
@@ -47,9 +51,13 @@ export function loadRequiredConfig(
 export function getAppBaseUrl(
   env: Record<string, string | undefined> = process.env
 ): string {
-  return (env.APP_BASE_URL || "http://127.0.0.1:3000")
-    .trim()
-    .replace(/\/+$/, "");
+  const rawBaseUrl = (env.APP_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (env.NODE_ENV === "production" && !rawBaseUrl) {
+    throw new Error(
+      "FAIL_CLOSED: APP_BASE_URL is required when NODE_ENV=production"
+    );
+  }
+  return rawBaseUrl || "http://127.0.0.1:3000";
 }
 
 export function getCookieOptions(

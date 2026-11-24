@@ -5,6 +5,7 @@ import {
   computeAccountOverlaps,
   normalizeRewardRule,
   canPartnerAccessAsset,
+  toMajorUnits,
 } from "@/lib/prmEngine";
 import { getActiveServerSession } from "@/lib/authSession";
 import { decryptBankDetails } from "@/lib/connectors";
@@ -64,15 +65,40 @@ export async function GET(
 
     switch (resource) {
       case "partners": {
-        const [partnersRaw, leads, deals, rewards] = await Promise.all([
+        const [partnersRaw, leads, dealsRaw, rewardsRaw] = await Promise.all([
           prisma.partner.findMany({ orderBy: { createdAt: "desc" } }),
           prisma.lead.findMany(),
           prisma.deal.findMany(),
           prisma.reward.findMany(),
         ]);
-        const computed = partnersRaw.map((p) =>
-          computePartnerKpis(p, leads, deals, rewards)
-        );
+        const deals = dealsRaw.map((d) => ({
+          ...d,
+          amount: toMajorUnits(d.amount),
+          amountSgd: toMajorUnits(d.amountSgd),
+        }));
+        const rewards = rewardsRaw.map((r) => ({
+          ...r,
+          amount: toMajorUnits(r.amount),
+          amountSgd: toMajorUnits(r.amountSgd),
+        }));
+        const computed = partnersRaw.map((p) => {
+          const decryptedToken =
+            p.leadFormTokenCipher && p.leadFormTokenCipher.startsWith("enc:v1:")
+              ? decryptBankDetails(p.leadFormTokenCipher)
+              : "";
+          const kpis = computePartnerKpis(
+            { ...p, leadFormToken: decryptedToken },
+            leads,
+            deals,
+            rewards
+          );
+          const {
+            leadFormTokenHash: _h,
+            leadFormTokenCipher: _c,
+            ...cleanPartner
+          } = kpis;
+          return cleanPartner;
+        });
         const scoped = scopedPartner
           ? computed.filter((p) => p.id === scopedPartner.id)
           : computed;
@@ -106,7 +132,7 @@ export async function GET(
       }
 
       case "programs": {
-        const [programsRaw, partnersRaw, leads, deals, rewards] =
+        const [programsRaw, partnersRaw, leads, dealsRaw, rewardsRaw] =
           await Promise.all([
             prisma.program.findMany({ orderBy: { createdAt: "asc" } }),
             prisma.partner.findMany(),
@@ -114,6 +140,16 @@ export async function GET(
             prisma.deal.findMany(),
             prisma.reward.findMany(),
           ]);
+        const deals = dealsRaw.map((d) => ({
+          ...d,
+          amount: toMajorUnits(d.amount),
+          amountSgd: toMajorUnits(d.amountSgd),
+        }));
+        const rewards = rewardsRaw.map((r) => ({
+          ...r,
+          amount: toMajorUnits(r.amount),
+          amountSgd: toMajorUnits(r.amountSgd),
+        }));
         const computedPartners = partnersRaw.map((p) =>
           computePartnerKpis(p, leads, deals, rewards)
         );
@@ -195,10 +231,17 @@ export async function GET(
         }
         break;
 
-      case "deals":
-        records = await prisma.deal.findMany({
+      case "deals": {
+        const rawDeals = await prisma.deal.findMany({
           orderBy: { createdAt: "desc" },
         });
+        records = rawDeals.map((d) => ({
+          ...d,
+          amountMinor: d.amount,
+          amountSgdMinor: d.amountSgd,
+          amount: toMajorUnits(d.amount),
+          amountSgd: toMajorUnits(d.amountSgd),
+        }));
         if (scopedPartner) {
           records = records.filter(
             (d) => d.partnerName === scopedPartner.name
@@ -208,11 +251,17 @@ export async function GET(
           }
         }
         break;
+      }
 
-      case "customers":
-        records = await prisma.customer.findMany({
+      case "customers": {
+        const rawCustomers = await prisma.customer.findMany({
           orderBy: { createdAt: "desc" },
         });
+        records = rawCustomers.map((c) => ({
+          ...c,
+          revenuesSgdMinor: c.revenuesSgd,
+          revenuesSgd: toMajorUnits(c.revenuesSgd),
+        }));
         if (scopedPartner) {
           records = records.filter(
             (c) => c.sourcePartnerName === scopedPartner.name
@@ -222,11 +271,19 @@ export async function GET(
           }
         }
         break;
+      }
 
-      case "transactions":
-        records = await prisma.transaction.findMany({
+      case "transactions": {
+        const rawTxs = await prisma.transaction.findMany({
           orderBy: { createdAt: "desc" },
         });
+        records = rawTxs.map((t) => ({
+          ...t,
+          amountMinor: t.amount,
+          amountSgdMinor: t.amountSgd,
+          amount: toMajorUnits(t.amount),
+          amountSgd: toMajorUnits(t.amountSgd),
+        }));
         if (scopedPartner) {
           records = records.filter(
             (t) => t.partnerName === scopedPartner.name
@@ -236,11 +293,19 @@ export async function GET(
           }
         }
         break;
+      }
 
-      case "rewards":
-        records = await prisma.reward.findMany({
+      case "rewards": {
+        const rawRewards = await prisma.reward.findMany({
           orderBy: { createdAt: "desc" },
         });
+        records = rawRewards.map((r) => ({
+          ...r,
+          amountMinor: r.amount,
+          amountSgdMinor: r.amountSgd,
+          amount: toMajorUnits(r.amount),
+          amountSgd: toMajorUnits(r.amountSgd),
+        }));
         if (scopedPartner) {
           records = records.filter(
             (r) => r.partnerName === scopedPartner.name
@@ -250,24 +315,28 @@ export async function GET(
           }
         }
         break;
+      }
 
       case "payouts": {
-        // §16.4 P1: Always compute payout amount and rewardsCount dynamically from linked `rewards` relation!
+        // §16.4 P1 & F6: Always compute payout amount and rewardsCount dynamically from linked `rewards` relation (stored in minor units)!
         const payoutsWithRewards = await prisma.payout.findMany({
           include: { rewards: true },
           orderBy: { createdAt: "desc" },
         });
         const computedPayouts = payoutsWithRewards.map((po) => {
           const linked = po.rewards || [];
-          const computedSgd =
-            Math.round(
-              linked.reduce((s, r) => s + Number(r.amountSgd || 0), 0) * 100
-            ) / 100;
+          const computedMinorSgd = linked.reduce(
+            (s, r) => s + Number(r.amountSgd || 0),
+            0
+          );
+          const computedMajorSgd = toMajorUnits(computedMinorSgd);
           return {
             ...po,
-            amount: computedSgd,
+            amountMinor: computedMinorSgd,
+            amountSgdMinor: computedMinorSgd,
+            amount: computedMajorSgd,
             currency: "SGD",
-            amountSgd: computedSgd,
+            amountSgd: computedMajorSgd,
             rewardsCount: linked.length,
           };
         });
@@ -348,10 +417,15 @@ export async function GET(
         break;
       }
 
-      case "business-plans":
-        records = await prisma.businessPlan.findMany({
+      case "business-plans": {
+        const rawPlans = await prisma.businessPlan.findMany({
           orderBy: { createdAt: "desc" },
         });
+        records = rawPlans.map((bp) => ({
+          ...bp,
+          targetRevSgdMinor: bp.targetRevSgd,
+          targetRevSgd: toMajorUnits(bp.targetRevSgd),
+        }));
         if (scopedPartner) {
           records = records.filter(
             (bp) => bp.partnerName === scopedPartner.name
@@ -361,6 +435,7 @@ export async function GET(
           }
         }
         break;
+      }
 
       case "accounts": {
         if (session.identityType === "partner") {
@@ -408,10 +483,15 @@ export async function GET(
         });
         break;
 
-      case "tracking-links":
-        records = await prisma.trackingLink.findMany({
+      case "tracking-links": {
+        const rawLinks = await prisma.trackingLink.findMany({
           orderBy: { createdAt: "desc" },
         });
+        records = rawLinks.map((lnk) => ({
+          ...lnk,
+          revenuesSgdMinor: lnk.revenuesSgd,
+          revenuesSgd: toMajorUnits(lnk.revenuesSgd),
+        }));
         if (scopedPartner) {
           records = records.filter(
             (l) => l.partnerName === scopedPartner.name
@@ -421,6 +501,7 @@ export async function GET(
           }
         }
         break;
+      }
 
       case "team-members":
         records = await prisma.partnerTeamMember.findMany({

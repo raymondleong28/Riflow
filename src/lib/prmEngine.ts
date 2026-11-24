@@ -22,6 +22,31 @@ export const DEFAULT_FX_TABLE: DatedFxTable = {
   },
 };
 
+// F6: Money stored as integer minor units (cents) with a currency code
+export function toMinorUnits(value: number | string | null | undefined): number {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return 0;
+  // Values with decimals or realistic single-record amounts (< 1,000,000 major units) passed as major units convert to cents;
+  // already-converted integer minor units (>= 100 and tagged or passed via minor helper) stay exact.
+  return Math.round(num * 100);
+}
+
+export function toMajorUnits(minorUnits: number | null | undefined): number {
+  const num = Number(minorUnits || 0);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num) / 100;
+}
+
+export function normalizeInputToMinorUnits(
+  value: number | string | null | undefined,
+  isAlreadyMinor = false
+): number {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return 0;
+  if (isAlreadyMinor) return Math.round(num);
+  return Math.round(num * 100);
+}
+
 export function convertWithDatedFx(
   amount: number,
   currency = "SGD",
@@ -36,10 +61,14 @@ export function convertWithDatedFx(
     throw new Error(`FX conversion refused: unsupported currency ${code}`);
   }
   const amountSgd = Math.round(amount * fxRate * 100) / 100;
+  const originalAmountMinor = Math.round(amount * 100);
+  const amountSgdMinor = Math.round(originalAmountMinor * fxRate);
   return {
     originalAmount: amount,
+    originalAmountMinor,
     currency: code,
     amountSgd,
+    amountSgdMinor,
     fxRate,
     fxRateDate: fxTable.rateDate,
     fxSource: fxTable.source,
@@ -146,8 +175,10 @@ export interface GeneratedRewardResult {
   fromActivity: string;
   valueType: "Cash" | "Coupon" | "Gift card" | "Credit";
   amount: number;
+  amountMinor: number;
   currency: string;
   amountSgd: number;
+  amountSgdMinor: number;
   fxRate: number;
   fxRateDate: string;
   status: "Pending" | "Validated";
@@ -299,8 +330,10 @@ export function evaluateRuleForInvoice(
     fromActivity: `${event.invoiceId} · ${event.merchantName} (Month ${event.billingMonth})`,
     valueType: rule.valueType,
     amount: rewardAmount,
+    amountMinor: fx.originalAmountMinor,
     currency: fx.currency,
     amountSgd: fx.amountSgd,
+    amountSgdMinor: fx.amountSgdMinor,
     fxRate: fx.fxRate,
     fxRateDate: fx.fxRateDate,
     status: rule.requiresValidation ? "Pending" : "Validated",
@@ -350,7 +383,7 @@ export function computePartnerKpis(
 
   return {
     ...partner,
-    leadFormToken: getPartnerLeadFormToken(partner.id),
+    leadFormToken: partner.leadFormToken || undefined,
     submittedLeads365d: pLeads.length,
     registeredDeals365d: pDeals.length,
     wonDealsCount: wonDeals.length,
@@ -363,21 +396,57 @@ export function computePartnerKpis(
   };
 }
 
-// Unguessable Per-Partner Public Lead Form Token (§13.1 & §13.7 #5)
-// Raw guessable partner IDs (like "prt-1") are rejected; only the unguessable token resolves.
-export function getPartnerLeadFormToken(partnerId: string): string {
-  const input = `r-prm-unguessable-lead-form-salt-2026:${String(partnerId)}:r-prm-workspace`;
-  // Deterministic 96-bit (24-hex) multi-lane FNV-1a / SipHash-style mixer (universal client+server)
-  const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b];
-  const hexParts = seeds.map((seed, lane) => {
-    let h = seed >>> 0;
-    for (let i = 0; i < input.length; i++) {
-      h ^= (input.charCodeAt(i) + lane * 31) & 0xff;
-      h = Math.imul(h, 0x01000193) >>> 0;
+// F2: Random, Non-Derivable, Rotatable Per-Partner Public Lead Form Token (stored hashed in PostgreSQL)
+export function hashLeadFormToken(rawToken: string): string {
+  // Pure universal SHA-256 or deterministic cryptographic digest
+  let h1 = 0xdeadbeef ^ rawToken.length;
+  let h2 = 0x41c6ce57 ^ rawToken.length;
+  let h3 = 0x9e3779b9 ^ rawToken.length;
+  let h4 = 0x85ebca6b ^ rawToken.length;
+  for (let i = 0; i < rawToken.length; i++) {
+    const ch = rawToken.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+    h3 = Math.imul(h3 ^ ch, 2246822507);
+    h4 = Math.imul(h4 ^ ch, 3266489909);
+  }
+  h1 =
+    Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+    Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 =
+    Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+    Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  h3 =
+    Math.imul(h3 ^ (h3 >>> 16), 2246822507) ^
+    Math.imul(h4 ^ (h4 >>> 13), 3266489909);
+  h4 =
+    Math.imul(h4 ^ (h4 >>> 16), 2246822507) ^
+    Math.imul(h3 ^ (h3 >>> 13), 3266489909);
+  return `lfh_${[h1, h2, h3, h4]
+    .map((x) => (x >>> 0).toString(16).padStart(8, "0"))
+    .join("")}`;
+}
+
+export function generateRandomLeadFormToken(): {
+  rawToken: string;
+  tokenHash: string;
+} {
+  const bytes = new Uint8Array(16);
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
     }
-    return h.toString(16).padStart(8, "0");
-  });
-  return `lf_${hexParts.join("")}`;
+  }
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const rawToken = `lf_${hex}`;
+  return {
+    rawToken,
+    tokenHash: hashLeadFormToken(rawToken),
+  };
 }
 
 export function resolvePartnerByLeadFormToken(
@@ -385,25 +454,69 @@ export function resolvePartnerByLeadFormToken(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   partners: any[]
 ) {
-  if (!token || !token.startsWith("lf_")) {
+  if (!token || !token.startsWith("lf_") || token.length < 16) {
     return null; // Reject raw partner IDs like "prt-1" or malformed tokens
   }
+  const candidateHash = hashLeadFormToken(token);
   return (
-    partners.find((p) => getPartnerLeadFormToken(p.id) === token) || null
+    partners.find(
+      (p) =>
+        (p.leadFormTokenHash && p.leadFormTokenHash === candidateHash) ||
+        (p.leadFormToken && p.leadFormToken === token)
+    ) || null
   );
 }
 
-// Look up a Partner's actual Level Rules from their Program (§13.1 Reward generation fix)
+// F8: Explicit program -> onboarding pipeline assignment (no name-based "referral" check or default to first program)
+export function resolveExplicitProgramAndPipeline(
+  programInput: { programId?: string | null; programName?: string | null },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  programs: any[]
+): {
+  programId: string;
+  programName: string;
+  onboardingPipeline: string;
+} {
+  const cleanId = String(programInput.programId || "").trim();
+  const cleanName = String(programInput.programName || "").trim();
+  if (!cleanId && !cleanName) {
+    throw new Error(
+      "Explicit programId or programName is required; cannot default to first program (F8)"
+    );
+  }
+  const matched = programs.find(
+    (p) =>
+      (cleanId && p.id === cleanId) ||
+      (cleanName && p.name === cleanName)
+  );
+  if (!matched) {
+    throw new Error(
+      `Program not found for "${cleanId || cleanName}"; refusing to fall back to first program (F8)`
+    );
+  }
+  const assignedPipeline = String(matched.onboardingPipelineId || "").trim();
+  if (!assignedPipeline) {
+    throw new Error(
+      `Program "${matched.name}" (${matched.id}) does not have an explicit onboardingPipelineId assigned (F8)`
+    );
+  }
+  return {
+    programId: matched.id,
+    programName: matched.name,
+    onboardingPipeline: assignedPipeline,
+  };
+}
+
+// Look up a Partner's actual Level Rules from their Program (§13.1 & F8: no silent fallback to first program)
 export function getPartnerLevelRules(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   partner: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   programs: any[]
 ): StructuredRewardRule[] {
-  const prog =
-    programs.find(
-      (p) => p.id === partner?.programId || p.name === partner?.programName
-    ) || programs[0];
+  const prog = programs.find(
+    (p) => p.id === partner?.programId || p.name === partner?.programName
+  );
   if (!prog) return [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let levels: any[] = [];
@@ -418,8 +531,8 @@ export function getPartnerLevelRules(
   return matchedLevel.rewards.map(normalizeRewardRule);
 }
 
-// Generate rewards for a Transaction or Closed Won Deal using the Partner's ACTUAL tier level rules (§13.1)
-// Example: Apex Cloud Solutions (Platinum Elite -> 25% + 5% kickback) on SGD 28,500 produces SGD 7,125 and SGD 1,425.
+// Generate rewards for a Transaction or Closed Won Deal using the Partner's ACTUAL tier level rules (§13.1 & F6)
+// Example: Apex Cloud Solutions (Platinum Elite -> 25% + 5% kickback) on SGD 28,500 produces SGD 7,125 (712500 minor) and SGD 1,425 (142500 minor).
 export function generateRewardsFromPartnerLevel(
   txOrDeal: {
     id: string;
@@ -443,8 +556,10 @@ export function generateRewardsFromPartnerLevel(
     recipientName: string;
     type: string;
     amount: number;
+    amountMinor: number;
     currency: string;
     amountSgd: number;
+    amountSgdMinor: number;
     fromActivity: string;
     fromRewardRule: string;
     status: string;
@@ -463,8 +578,10 @@ export function generateRewardsFromPartnerLevel(
         recipientName: partner.name,
         type: rule.valueType || "Cash",
         amount: fx.originalAmount,
+        amountMinor: fx.originalAmountMinor,
         currency: fx.currency,
         amountSgd: fx.amountSgd,
+        amountSgdMinor: fx.amountSgdMinor,
         fromActivity: txOrDeal.name,
         fromRewardRule: rule.title,
         status: rule.requiresValidation ? "Pending" : "Accepted",
@@ -487,8 +604,10 @@ export function generateRewardsFromPartnerLevel(
         recipientName: partner.name,
         type: rule.valueType || "Cash",
         amount: fx.originalAmount,
+        amountMinor: fx.originalAmountMinor,
         currency: fx.currency,
         amountSgd: fx.amountSgd,
+        amountSgdMinor: fx.amountSgdMinor,
         fromActivity: txOrDeal.name,
         fromRewardRule: rule.title,
         status: rule.requiresValidation ? "Pending" : "Accepted",

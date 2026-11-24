@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "./prisma";
-import { convertWithDatedFx, normalizeAccountKey } from "./prmEngine";
+import {
+  convertWithDatedFx,
+  generateRandomLeadFormToken,
+  normalizeAccountKey,
+  toMinorUnits,
+} from "./prmEngine";
 import { issuePartnerActivationLink, RprmSession } from "./authSession";
 import { encryptBankDetails, sendEmailViaConnector } from "./connectors";
 
@@ -205,6 +210,7 @@ export async function handleCsvImportMutation(
   let importedCount = 0;
   for (const r of validRows) {
     if (objectType === "partners") {
+      const lf = generateRandomLeadFormToken();
       await prisma.partner.create({
         data: {
           name: r.name,
@@ -216,6 +222,8 @@ export async function handleCsvImportMutation(
           contactFirstName: r.contactFirstName || "Main",
           contactLastName: r.contactLastName || "Contact",
           contactEmail: r.contactEmail || "contact@partner.example.com",
+          leadFormTokenHash: lf.tokenHash,
+          leadFormTokenCipher: encryptBankDetails(lf.rawToken),
           bankDetailsJson: r.bankDetailsJson
             ? encryptBankDetails(r.bankDetailsJson)
             : encryptBankDetails("{}"),
@@ -255,9 +263,9 @@ export async function handleCsvImportMutation(
           name: r.name,
           company: r.company,
           clientName: r.clientName || r.company,
-          amount: amt,
+          amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgd,
+          amountSgd: fx.amountSgdMinor,
           partnerName: r.partnerName || "Apex Cloud Solutions Pte Ltd",
           sourcePartnerName: r.partnerName || "Apex Cloud Solutions Pte Ltd",
           stage: r.stage || "Discovery Stage",
@@ -270,7 +278,7 @@ export async function handleCsvImportMutation(
           name: r.name,
           email: r.email,
           sourcePartnerName: r.sourcePartnerName || "Apex Cloud Solutions Pte Ltd",
-          revenuesSgd: Number(r.revenuesSgd) || 0,
+          revenuesSgd: toMinorUnits(Number(r.revenuesSgd) || 0),
         },
       });
       importedCount++;
@@ -280,9 +288,9 @@ export async function handleCsvImportMutation(
       await prisma.transaction.create({
         data: {
           name: r.name,
-          amount: amt,
+          amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgd,
+          amountSgd: fx.amountSgdMinor,
           partnerName: r.partnerName,
           customerName: r.customerName || "Enterprise Client",
           dealName: r.dealName || "Enterprise Deal",
@@ -297,9 +305,9 @@ export async function handleCsvImportMutation(
           rewardNumber: r.rewardNumber || `RW-IMP-${Date.now().toString().slice(-4)}`,
           partnerName: r.partnerName,
           recipientName: r.partnerName,
-          amount: amt,
+          amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgd,
+          amountSgd: fx.amountSgdMinor,
           fromActivity: r.fromActivity || "CSV Import",
           status: r.status || "Pending",
         },
@@ -313,9 +321,9 @@ export async function handleCsvImportMutation(
           payoutNumber: r.payoutNumber,
           name: r.name || `Imported Payout ${r.payoutNumber}`,
           partnerName: r.partnerName,
-          amount: amt,
+          amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgd,
+          amountSgd: fx.amountSgdMinor,
           status: r.status || "Ready",
         },
       });

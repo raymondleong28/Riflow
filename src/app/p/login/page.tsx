@@ -7,6 +7,11 @@ import { AlertCircle } from "lucide-react";
 export default function PartnerPortalLoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaEnrollment, setMfaEnrollment] = useState<{
+    otpauthUri: string;
+    recoveryCodes: string[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showDevLogins, setShowDevLogins] = useState(false);
@@ -43,10 +48,14 @@ export default function PartnerPortalLoginPage() {
           identityType: "partner",
           email,
           password,
+          mfaCode: mfaCode || undefined,
         }),
       });
       const json = await res.json();
       if (!res.ok) {
+        if (json.mfaEnrollmentRequired && json.enrollment) {
+          setMfaEnrollment(json.enrollment);
+        }
         setError(json.error || "Partner sign-in failed");
         setSubmitting(false);
         return;
@@ -87,6 +96,29 @@ export default function PartnerPortalLoginPage() {
           </div>
         )}
 
+        {mfaEnrollment && (
+          <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 space-y-2 text-[11px] text-slate-800">
+            <p className="font-bold text-blue-900">
+              First-Login MFA Enrolment Required
+            </p>
+            <p>
+              Add this URI to your Authenticator app or enter one of your
+              recovery codes below:
+            </p>
+            <p className="font-mono bg-white p-2 rounded border border-blue-200 break-all">
+              {mfaEnrollment.otpauthUri}
+            </p>
+            <p className="font-semibold text-blue-800">
+              One-Time Recovery Codes:
+            </p>
+            <div className="grid grid-cols-2 gap-1 font-mono bg-white p-2 rounded border border-blue-200">
+              {mfaEnrollment.recoveryCodes.map((c) => (
+                <span key={c}>{c}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleLogin} className="space-y-3.5">
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
@@ -112,6 +144,17 @@ export default function PartnerPortalLoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
               className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block font-semibold text-slate-700 mb-1">
+              Authenticator Code / Recovery Code (Optional unless enforced)
+            </label>
+            <input
+              value={mfaCode}
+              onChange={(e) => setMfaCode(e.target.value)}
+              placeholder="6-digit TOTP or recovery code"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono"
             />
           </div>
           <button

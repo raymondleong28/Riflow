@@ -8,7 +8,10 @@ import {
   redeemActivationTokenAndSetPassword,
   revokeServerSessionById,
 } from "@/lib/authSession";
-import { verifyTotpOrRecoveryCode } from "@/lib/connectors";
+import {
+  enrollTotpMfa,
+  verifyTotpOrRecoveryCode,
+} from "@/lib/connectors";
 import { getCookieOptions } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
@@ -211,17 +214,93 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (body.mfaCode) {
-      const userRow = await prisma.user.findUnique({
-        where: { id: authResult.user.id },
+    const userRow = await prisma.user.findUnique({
+      where: { id: authResult.user.id },
+    });
+    if (!userRow) {
+      return NextResponse.json({ error: "User not found" }, { status: 401 });
+    }
+
+    // F1: Enforce MFA when required by workspace settings (requireMfaCoworkers / requireMfaPartners), with zero fallback secrets
+    let requireMfaForUser = false;
+    const acctSettingRow = await prisma.appSetting.findUnique({
+      where: { key: "account_settings" },
+    });
+    if (acctSettingRow?.valueJson) {
+      try {
+        const acct = JSON.parse(acctSettingRow.valueJson);
+        if (surface === "coworker" && Boolean(acct.requireMfaCoworkers)) {
+          requireMfaForUser = true;
+        }
+        if (surface === "partner" && Boolean(acct.requireMfaPartners)) {
+          requireMfaForUser = true;
+        }
+      } catch {
+        // ignore malformed setting
+      }
+    }
+
+    if (requireMfaForUser && !userRow.mfaSecret) {
+      // First-login MFA enrolment when required by workspace policy
+      const enrolled = enrollTotpMfa(userRow.email);
+      await prisma.user.update({
+        where: { id: userRow.id },
+        data: {
+          mfaSecret: enrolled.secret,
+          recoveryCodesJson: JSON.stringify(enrolled.recoveryCodes),
+        },
       });
-      const secret = userRow?.mfaSecret || "RPRMTOTPSECRET2026";
-      const recoveryCodes: string[] = userRow?.recoveryCodesJson
+      await prisma.auditLog.create({
+        data: {
+          actor: userRow.email,
+          actorRole: `${userRow.identityType} (${userRow.role})`,
+          action: "MFA_ENROLLMENT_ISSUED",
+          objectType: "User",
+          objectId: userRow.id,
+          summary: `Issued first-login MFA enrollment for ${userRow.email} because MFA is required by workspace policy`,
+        },
+      });
+      return NextResponse.json(
+        {
+          error:
+            "Multi-factor authentication is required. Enroll your authenticator app and enter the 6-digit code to sign in.",
+          mfaEnrollmentRequired: true,
+          enrollment: {
+            otpauthUri: enrolled.otpauthUri,
+            recoveryCodes: enrolled.recoveryCodes,
+          },
+        },
+        { status: 403 }
+      );
+    }
+
+    if (requireMfaForUser && !body.mfaCode) {
+      return NextResponse.json(
+        {
+          error:
+            "Multi-factor authentication code is required by workspace security policy.",
+          mfaRequired: true,
+        },
+        { status: 401 }
+      );
+    }
+
+    if (body.mfaCode) {
+      if (!userRow.mfaSecret) {
+        return NextResponse.json(
+          {
+            error:
+              "MFA is not enrolled on this account. Enroll an authenticator first.",
+          },
+          { status: 401 }
+        );
+      }
+      const recoveryCodes: string[] = userRow.recoveryCodesJson
         ? JSON.parse(userRow.recoveryCodesJson)
         : [];
       const mfaCheck = verifyTotpOrRecoveryCode(
         body.mfaCode,
-        secret,
+        userRow.mfaSecret,
         recoveryCodes
       );
       if (!mfaCheck.valid) {
@@ -230,7 +309,7 @@ export async function POST(req: NextRequest) {
           { status: 401 }
         );
       }
-      if (mfaCheck.method === "recovery" && userRow) {
+      if (mfaCheck.method === "recovery") {
         await prisma.user.update({
           where: { id: userRow.id },
           data: {

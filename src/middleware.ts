@@ -20,6 +20,11 @@ function getEdgeSessionSecret(): string {
 
 function getEdgeBaseUrl(req: NextRequest): string {
   const configured = (process.env.APP_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (process.env.NODE_ENV === "production" && !configured) {
+    throw new Error(
+      "FAIL_CLOSED: APP_BASE_URL is required when NODE_ENV=production"
+    );
+  }
   if (configured) return configured;
   return `${req.nextUrl.protocol}//${req.nextUrl.host}`;
 }

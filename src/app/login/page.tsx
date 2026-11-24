@@ -8,6 +8,10 @@ export default function CoworkerLoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mfaCode, setMfaCode] = useState("");
+  const [mfaEnrollment, setMfaEnrollment] = useState<{
+    otpauthUri: string;
+    recoveryCodes: string[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showDevLogins, setShowDevLogins] = useState(false);
@@ -48,6 +52,9 @@ export default function CoworkerLoginPage() {
       });
       const json = await res.json();
       if (!res.ok) {
+        if (json.mfaEnrollmentRequired && json.enrollment) {
+          setMfaEnrollment(json.enrollment);
+        }
         setError(json.error || "Sign-in failed");
         setSubmitting(false);
         return;
@@ -83,6 +90,29 @@ export default function CoworkerLoginPage() {
           <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 font-semibold flex items-center space-x-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {mfaEnrollment && (
+          <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 space-y-2 text-[11px] text-slate-800">
+            <p className="font-bold text-blue-900">
+              First-Login MFA Enrolment Required
+            </p>
+            <p>
+              Add this URI to your Authenticator app or enter one of your
+              recovery codes below:
+            </p>
+            <p className="font-mono bg-white p-2 rounded border border-blue-200 break-all">
+              {mfaEnrollment.otpauthUri}
+            </p>
+            <p className="font-semibold text-blue-800">
+              One-Time Recovery Codes:
+            </p>
+            <div className="grid grid-cols-2 gap-1 font-mono bg-white p-2 rounded border border-blue-200">
+              {mfaEnrollment.recoveryCodes.map((c) => (
+                <span key={c}>{c}</span>
+              ))}
+            </div>
           </div>
         )}
 

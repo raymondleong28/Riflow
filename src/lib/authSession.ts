@@ -159,11 +159,10 @@ export async function getActiveServerSession(
   if (row.expiresAt.getTime() <= Date.now()) return null;
   if (row.user.status === "Disabled") return null;
 
-  // §16.3 G10: Test accounts are blocked from signing in or holding active sessions in NODE_ENV=production when BLOCK_TEST_ACCOUNTS_IN_PROD is active
+  // F4: Test accounts are ALWAYS blocked from signing in or holding active sessions in NODE_ENV=production (no opt-in flag)
   if (
     process.env.NODE_ENV === "production" &&
-    process.env.BLOCK_TEST_ACCOUNTS === "true" &&
-    row.user.isTestAccount
+    (row.user.isTestAccount || row.user.email.endsWith(".example.com"))
   ) {
     return null;
   }
@@ -197,7 +196,7 @@ export async function getActiveServerSession(
   };
 }
 
-// §16.2 S13: In-memory & DB-backed rate limiter for `/api/auth` and `/api/public-forms`
+// §16.2 S13 & F7: Database-backed rate limiter for `/api/auth` and `/api/public-forms` (survives restarts)
 interface RateLimitEntry {
   failures: number;
   lockedUntil: number;
@@ -206,36 +205,81 @@ const rateLimitStore = new Map<string, RateLimitEntry>();
 const MAX_AUTH_FAILURES = 8;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
-export function checkRateLimitKey(key: string): {
+export async function checkRateLimitKey(key: string): Promise<{
   allowed: boolean;
   retryAfterSeconds: number;
-} {
-  const entry = rateLimitStore.get(key);
-  if (!entry) return { allowed: true, retryAfterSeconds: 0 };
-  if (entry.lockedUntil > Date.now()) {
+}> {
+  const now = Date.now();
+  const dbRow = await prisma.loginLockout
+    .findUnique({ where: { key } })
+    .catch(() => null);
+  const memEntry = rateLimitStore.get(key);
+
+  const lockedUntilMs = Math.max(
+    dbRow?.lockedUntil ? dbRow.lockedUntil.getTime() : 0,
+    memEntry?.lockedUntil ?? 0
+  );
+
+  if (lockedUntilMs > now) {
     return {
       allowed: false,
-      retryAfterSeconds: Math.ceil((entry.lockedUntil - Date.now()) / 1000),
+      retryAfterSeconds: Math.ceil((lockedUntilMs - now) / 1000),
     };
   }
   return { allowed: true, retryAfterSeconds: 0 };
 }
 
-export function recordAuthFailure(key: string): {
+export async function recordAuthFailure(key: string): Promise<{
   lockedOut: boolean;
   failures: number;
-} {
+}> {
   const now = Date.now();
-  const existing = rateLimitStore.get(key) || { failures: 0, lockedUntil: 0 };
-  const nextFailures = existing.failures + 1;
-  const lockedUntil =
+  const dbRow = await prisma.loginLockout
+    .findUnique({ where: { key } })
+    .catch(() => null);
+  const memEntry = rateLimitStore.get(key) || { failures: 0, lockedUntil: 0 };
+
+  const currentFailures = Math.max(dbRow?.failures ?? 0, memEntry.failures);
+  const nextFailures = currentFailures + 1;
+  const lockedUntilMs =
     nextFailures >= MAX_AUTH_FAILURES ? now + LOCKOUT_DURATION_MS : 0;
-  rateLimitStore.set(key, { failures: nextFailures, lockedUntil });
-  return { lockedOut: lockedUntil > now, failures: nextFailures };
+
+  rateLimitStore.set(key, {
+    failures: nextFailures,
+    lockedUntil: lockedUntilMs,
+  });
+
+  await prisma.loginLockout
+    .upsert({
+      where: { key },
+      update: {
+        failures: nextFailures,
+        lockedUntil: lockedUntilMs > 0 ? new Date(lockedUntilMs) : null,
+      },
+      create: {
+        key,
+        failures: nextFailures,
+        lockedUntil: lockedUntilMs > 0 ? new Date(lockedUntilMs) : null,
+      },
+    })
+    .catch(() => {});
+
+  return { lockedOut: lockedUntilMs > now, failures: nextFailures };
 }
 
-export function resetRateLimitKey(key: string): void {
+export async function resetRateLimitKey(key: string): Promise<void> {
   rateLimitStore.delete(key);
+  await prisma.loginLockout
+    .deleteMany({ where: { key } })
+    .catch(() => {});
+}
+
+/**
+ * Simulate a server process restart by clearing the in-memory rate-limit cache,
+ * so tests can prove that database-backed lockouts (F7) survive restarts.
+ */
+export function clearInMemoryRateLimitCache(): void {
+  rateLimitStore.clear();
 }
 
 // §16.2 S5, S6, S7 & §16.3 G10: Authenticate strictly against the `User` table using exact normalized email match
@@ -266,7 +310,7 @@ export async function authenticateUserFromDatabase(
   }
 
   const rateKey = `auth:${clientIp}:${email}`;
-  const rateCheck = checkRateLimitKey(rateKey);
+  const rateCheck = await checkRateLimitKey(rateKey);
   if (!rateCheck.allowed) {
     return {
       ok: false,
@@ -281,7 +325,7 @@ export async function authenticateUserFromDatabase(
   });
 
   if (!user || user.identityType !== expectedSurface) {
-    recordAuthFailure(rateKey);
+    await recordAuthFailure(rateKey);
     return {
       ok: false,
       error: "Invalid email or password",
@@ -297,10 +341,10 @@ export async function authenticateUserFromDatabase(
     };
   }
 
+  // F4: Always block test accounts in production (no flag)
   if (
     process.env.NODE_ENV === "production" &&
-    process.env.BLOCK_TEST_ACCOUNTS === "true" &&
-    user.isTestAccount
+    (user.isTestAccount || user.email.endsWith(".example.com"))
   ) {
     return {
       ok: false,
@@ -310,7 +354,7 @@ export async function authenticateUserFromDatabase(
   }
 
   if (!verifyPasswordWithStoredSalt(passwordInput, user.passwordHash)) {
-    const failState = recordAuthFailure(rateKey);
+    const failState = await recordAuthFailure(rateKey);
     return {
       ok: false,
       error: failState.lockedOut
@@ -320,7 +364,7 @@ export async function authenticateUserFromDatabase(
     };
   }
 
-  resetRateLimitKey(rateKey);
+  await resetRateLimitKey(rateKey);
 
   return {
     ok: true,

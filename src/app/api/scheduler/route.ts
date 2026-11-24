@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getActiveServerSession } from "@/lib/authSession";
-import { buildScheduledPayoutBatches } from "@/lib/prmEngine";
+import { buildScheduledPayoutBatches, toMinorUnits, toMajorUnits } from "@/lib/prmEngine";
 import { sendEmailViaConnector } from "@/lib/connectors";
 
 export const dynamic = "force-dynamic";
@@ -313,9 +313,9 @@ export async function POST(req: NextRequest) {
         id: rw.id,
         rewardNumber: rw.rewardNumber,
         partnerName: rw.partnerName,
-        amount: rw.amount,
+        amount: toMajorUnits(rw.amount),
         currency: rw.currency,
-        amountSgd: rw.amountSgd,
+        amountSgd: toMajorUnits(rw.amountSgd),
         status: rw.status,
         payoutNumber: rw.payoutNumber,
         periodDate: matchedTx?.monthKey || "11/2026",
@@ -335,9 +335,9 @@ export async function POST(req: NextRequest) {
           payoutNumber: batch.payoutNumber,
           name: batch.name,
           partnerName: batch.partnerName,
-          amount: batch.amountSgd,
+          amount: toMinorUnits(batch.amountSgd),
           currency: "SGD",
-          amountSgd: batch.amountSgd,
+          amountSgd: toMinorUnits(batch.amountSgd),
           periodFrom: batch.periodFrom,
           periodTo: batch.periodTo,
           rewardsCount: batch.rewardsCount,

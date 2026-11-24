@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   resolvePartnerByLeadFormToken,
-  getPartnerLeadFormToken,
+  generateRandomLeadFormToken,
+  resolveExplicitProgramAndPipeline,
 } from "@/lib/prmEngine";
 import { checkRateLimitKey, recordAuthFailure } from "@/lib/authSession";
+import { encryptBankDetails } from "@/lib/connectors";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +39,7 @@ export async function GET(req: NextRequest) {
           id: matched.id,
           name: matched.name,
           programName: matched.programName,
-          leadFormToken: getPartnerLeadFormToken(matched.id),
+          leadFormToken: leadToken,
         },
       });
     }
@@ -80,7 +82,7 @@ export async function POST(req: NextRequest) {
     const clientIp =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
     const rateKey = `public_form:${clientIp}`;
-    const rateCheck = checkRateLimitKey(rateKey);
+    const rateCheck = await checkRateLimitKey(rateKey);
     if (!rateCheck.allowed) {
       return NextResponse.json(
         {
@@ -96,7 +98,7 @@ export async function POST(req: NextRequest) {
 
     if (formType === "public_lead") {
       if (!payload?.consentTerms72) {
-        recordAuthFailure(rateKey);
+        await recordAuthFailure(rateKey);
         return NextResponse.json(
           {
             error:
@@ -108,7 +110,7 @@ export async function POST(req: NextRequest) {
       const partners = await prisma.partner.findMany();
       const matched = resolvePartnerByLeadFormToken(payload.token, partners);
       if (!matched) {
-        recordAuthFailure(rateKey);
+        await recordAuthFailure(rateKey);
         return NextResponse.json(
           { error: "This link isn't valid" },
           { status: 404 }
@@ -153,16 +155,31 @@ export async function POST(req: NextRequest) {
     }
 
     if (formType === "public_application") {
-      const prog =
-        (await prisma.program.findUnique({
-          where: { id: payload.programId || "prog-strategic" },
-        })) || (await prisma.program.findFirst());
+      const allPrograms = await prisma.program.findMany();
+      let resolved: {
+        programId: string;
+        programName: string;
+        onboardingPipeline: string;
+      };
+      try {
+        resolved = resolveExplicitProgramAndPipeline(
+          {
+            programId: payload.programId,
+            programName: payload.programName,
+          },
+          allPrograms
+        );
+      } catch (err) {
+        return NextResponse.json({ error: String(err) }, { status: 400 });
+      }
+      const lf = generateRandomLeadFormToken();
 
       const partner = await prisma.partner.create({
         data: {
           name: payload.companyName,
-          programId: prog?.id || "prog-strategic",
-          programName: prog?.name || "R-Cloud Strategic Solution Partners",
+          programId: resolved.programId,
+          programName: resolved.programName,
+          onboardingPipeline: resolved.onboardingPipeline,
           country: payload.country || "Singapore",
           contactFirstName: payload.contactFirstName,
           contactLastName: payload.contactLastName,
@@ -176,6 +193,8 @@ export async function POST(req: NextRequest) {
           prospectionStage: "New",
           portalAccess: false,
           activeSince: new Date().toISOString().slice(0, 10),
+          leadFormTokenHash: lf.tokenHash,
+          leadFormTokenCipher: encryptBankDetails(lf.rawToken),
         },
       });
 
