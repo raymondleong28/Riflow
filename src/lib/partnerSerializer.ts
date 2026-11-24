@@ -231,7 +231,8 @@ export function serializeManageItemForPartner(item: any, partnerName: string, pa
       status: item.status,
       folder: meta.folder || "General Collateral",
       fileType: meta.fileType || "PDF",
-      fileUrl: meta.fileUrl || "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf",
+      fileUrl:
+        meta.fileUrl || "/api/files/R-PRM_2026_Enterprise_Pitch_Deck.pdf",
       fileName: meta.fileName || item.name,
       size: meta.size || "2.4 MB",
     };

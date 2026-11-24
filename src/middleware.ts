@@ -1,24 +1,58 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Edge-compatible HMAC-SHA256 verification of the httpOnly rprm_session cookie (§13.1 & §13.3):
-// Enforces a session check on every Admin page, Partner Portal page, and API route.
-const SESSION_SECRET =
-  process.env.SESSION_SECRET || "r-prm-local-complete-hmac-session-secret-2026";
+/**
+ * §16.2 S1, S3, S4 & §16.3 G5: Edge Middleware
+ * - No fallback SESSION_SECRET: refuses requests if SESSION_SECRET is missing or < 32 bytes.
+ * - Verifies `<sessionId>.<identityType>.<hmac>` cookie signature.
+ * - Blocks unauthenticated `/uploads/*` and `/api/*` requests.
+ * - Uses `APP_BASE_URL` for redirects (`G5`).
+ */
 
-async function verifyCookieEdge(token?: string) {
-  if (!token || !token.includes(".")) return null;
-  const [payloadB64, sig] = token.split(".");
-  if (!payloadB64 || !sig) return null;
+function getEdgeSessionSecret(): string {
+  const secret = (process.env.SESSION_SECRET || "").trim();
+  if (secret.length < 32) {
+    throw new Error(
+      "FAIL_CLOSED: SESSION_SECRET is missing or shorter than 32 bytes"
+    );
+  }
+  return secret;
+}
 
+function getEdgeBaseUrl(req: NextRequest): string {
+  const configured = (process.env.APP_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (configured) return configured;
+  return `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+}
+
+async function verifyCookieEdge(
+  token?: string
+): Promise<{ sessionId: string; identityType: "coworker" | "partner" } | null> {
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [sessionId, identityType, sig] = parts;
+  if (
+    !sessionId ||
+    (identityType !== "coworker" && identityType !== "partner") ||
+    !sig
+  ) {
+    return null;
+  }
+
+  const secret = getEdgeSessionSecret();
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
-    enc.encode(SESSION_SECRET),
+    enc.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"]
   );
-  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(payloadB64));
+  const mac = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    enc.encode(`${sessionId}.${identityType}`)
+  );
   const bytes = new Uint8Array(mac);
   let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) {
@@ -30,27 +64,30 @@ async function verifyCookieEdge(token?: string) {
     .replace(/=+$/, "");
 
   if (sig !== expectedSig) return null;
-  try {
-    const jsonStr = atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/"));
-    return JSON.parse(jsonStr);
-  } catch {
-    return null;
-  }
+  return { sessionId, identityType };
 }
 
 export async function middleware(req: NextRequest) {
+  // Enforce fail-closed SESSION_SECRET check on every request (S1)
+  getEdgeSessionSecret();
+
   const { pathname } = req.nextUrl;
+  const baseUrl = getEdgeBaseUrl(req);
 
   // Public surfaces that do not require an authenticated session
+  // Note: `/uploads` is intentionally NOT public (§16.2 S4)!
   if (
     pathname.startsWith("/_next") ||
-    pathname.startsWith("/uploads") ||
     pathname === "/favicon.ico" ||
     pathname === "/login" ||
     pathname === "/p/login" ||
+    pathname === "/p/activate" ||
+    pathname.startsWith("/p/activate/") ||
     pathname.startsWith("/forms/") ||
     pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/api/public-forms")
+    pathname.startsWith("/api/public-forms") ||
+    pathname.startsWith("/api/health") ||
+    pathname.startsWith("/api/scheduler")
   ) {
     return NextResponse.next();
   }
@@ -58,13 +95,14 @@ export async function middleware(req: NextRequest) {
   const cookieVal = req.cookies.get("rprm_session")?.value;
   const session = await verifyCookieEdge(cookieVal);
 
-  // API routes: return 401 JSON if no valid session cookie
-  if (pathname.startsWith("/api/")) {
+  // API and file download routes: return 401 JSON if no valid session cookie
+  if (pathname.startsWith("/api/") || pathname.startsWith("/uploads")) {
     if (!session) {
       return NextResponse.json(
         {
           lookupStatus: "could_not_check",
-          error: "Authentication required: missing or invalid httpOnly session cookie",
+          error:
+            "Authentication required: missing or invalid httpOnly session cookie",
         },
         { status: 401 }
       );
@@ -80,18 +118,17 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith("/portal/")
   ) {
     if (!session) {
-      return NextResponse.redirect(new URL("/p/login", req.url));
+      return NextResponse.redirect(`${baseUrl}/p/login`);
     }
     return NextResponse.next();
   }
 
   // Admin pages: require authenticated Coworker session
   if (!session) {
-    return NextResponse.redirect(new URL("/login", req.url));
+    return NextResponse.redirect(`${baseUrl}/login`);
   }
   if (session.identityType === "partner") {
-    // Partner users can never reach admin routes (§3 Slice 0c & §13.3)
-    return NextResponse.redirect(new URL("/p", req.url));
+    return NextResponse.redirect(`${baseUrl}/p`);
   }
 
   return NextResponse.next();

@@ -719,7 +719,7 @@ function StandalonePartnerPortalContent() {
                 const assetAny = a as any;
                 let fileUrl =
                   assetAny.fileUrl ||
-                  "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
+                  "/api/files/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
                 let fileName = assetAny.fileName || a.name;
                 if (a.metadataJson) {
                   try {

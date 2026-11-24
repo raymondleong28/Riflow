@@ -130,7 +130,7 @@ export default function CoworkerLoginPage() {
               • Member: <code>sarah@r-prm.example.com</code>
             </p>
             <p>
-              • Password: <code>RprmAdmin2026!</code>
+              • Password: configured via <code>SEED_ADMIN_PASSWORD</code> in <code>.env</code>
             </p>
           </div>
         )}

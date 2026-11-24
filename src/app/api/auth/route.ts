@@ -2,19 +2,37 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   authenticateUserFromDatabase,
-  getServerSession,
-  signSessionToken,
+  createServerSessionRow,
+  getActiveServerSession,
+  inspectActivationToken,
+  redeemActivationTokenAndSetPassword,
+  revokeServerSessionById,
 } from "@/lib/authSession";
 import { verifyTotpOrRecoveryCode } from "@/lib/connectors";
+import { getCookieOptions } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const activateToken = searchParams.get("activateToken");
+
+  if (activateToken) {
+    const info = await inspectActivationToken(activateToken);
+    if (!info || !info.valid) {
+      return NextResponse.json(
+        { valid: false, error: info?.reason || "Invalid activation token" },
+        { status: 400 }
+      );
+    }
+    return NextResponse.json(info);
+  }
+
   const showDevLogins =
     process.env.NODE_ENV !== "production" &&
     process.env.SHOW_DEV_LOGINS === "true";
 
-  const session = getServerSession(req);
+  const session = await getActiveServerSession(req);
   if (!session) {
     return NextResponse.json(
       { authenticated: false, session: null, showDevLogins },
@@ -29,17 +47,19 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { action } = body;
 
+    // 1. Real Logout: revoke server-side Session row & delete cookie (§16.2 S2 & S3)
     if (action === "logout") {
-      const current = getServerSession(req);
+      const current = await getActiveServerSession(req);
       if (current) {
+        await revokeServerSessionById(current.sessionId);
         await prisma.auditLog.create({
           data: {
             actor: current.email,
             actorRole: `${current.identityType} (${current.role})`,
             action: "LOGOUT",
             objectType: "Session",
-            objectId: current.userId,
-            summary: `User ${current.email} signed out`,
+            objectId: current.sessionId,
+            summary: `User ${current.email} signed out and revoked session ${current.sessionId}`,
           },
         });
       }
@@ -48,8 +68,31 @@ export async function POST(req: NextRequest) {
       return res;
     }
 
+    // 2. Redeem Single-Use Activation Token & Set Password (§16.2 S9)
+    if (action === "activate_account") {
+      const redeemed = await redeemActivationTokenAndSetPassword(
+        body.token,
+        body.password
+      );
+      if (!redeemed.ok) {
+        return NextResponse.json({ error: redeemed.error }, { status: 400 });
+      }
+      await prisma.auditLog.create({
+        data: {
+          actor: redeemed.user.email,
+          actorRole: `partner (${redeemed.user.role})`,
+          action: "ACTIVATE_ACCOUNT",
+          objectType: "User",
+          objectId: redeemed.user.id,
+          summary: `Partner user ${redeemed.user.email} redeemed activation link and set password`,
+        },
+      });
+      return NextResponse.json({ ok: true, user: redeemed.user });
+    }
+
+    // 3. Impersonate Partner (§4.4)
     if (action === "impersonate") {
-      const current = getServerSession(req);
+      const current = await getActiveServerSession(req);
       if (!current || current.identityType !== "coworker") {
         return NextResponse.json(
           { error: "Only authenticated coworkers may impersonate a partner" },
@@ -65,12 +108,10 @@ export async function POST(req: NextRequest) {
           { status: 404 }
         );
       }
-      const updatedSession = {
-        ...current,
-        impersonatingPartnerId: partner.id,
-        partnerId: partner.id,
-        partnerName: partner.name,
-      };
+      await prisma.session.update({
+        where: { id: current.sessionId },
+        data: { impersonatingPartnerId: partner.id },
+      });
       await prisma.auditLog.create({
         data: {
           actor: current.email,
@@ -81,80 +122,121 @@ export async function POST(req: NextRequest) {
           summary: `Coworker ${current.email} started impersonation session as "${partner.name}"`,
         },
       });
-      const res = NextResponse.json({ ok: true, session: updatedSession });
-      res.cookies.set("rprm_session", signSessionToken(updatedSession), {
-        path: "/",
-        httpOnly: true,
-        sameSite: "lax",
-        maxAge: 86400,
+      return NextResponse.json({
+        ok: true,
+        session: {
+          ...current,
+          impersonatingPartnerId: partner.id,
+          partnerId: partner.id,
+          partnerName: partner.name,
+        },
       });
-      return res;
     }
 
+    // 4. Exit Impersonation
     if (action === "exit_impersonate") {
-      const current = getServerSession(req);
+      const current = await getActiveServerSession(req);
       if (!current) {
         return NextResponse.json({ error: "Not signed in" }, { status: 401 });
       }
-      const restoredSession = {
-        ...current,
-        impersonatingPartnerId: null,
-        partnerId: null,
-        partnerName: null,
-      };
-      const res = NextResponse.json({ ok: true, session: restoredSession });
-      res.cookies.set("rprm_session", signSessionToken(restoredSession), {
-        path: "/",
-        httpOnly: true,
-        sameSite: "lax",
-        maxAge: 86400,
+      await prisma.session.update({
+        where: { id: current.sessionId },
+        data: { impersonatingPartnerId: null },
       });
-      return res;
+      return NextResponse.json({
+        ok: true,
+        session: {
+          ...current,
+          impersonatingPartnerId: null,
+          partnerId: null,
+          partnerName: null,
+        },
+      });
     }
 
-    // Standard login (Coworker or Partner User)
+    // 5. Standard Login (Coworker or Partner User) with IP + Email Rate Limit (§16.2 S3, S5, S6, S7, S13)
     const surface = body.identityType === "partner" ? "partner" : "coworker";
+    const clientIp =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+
     const authResult = await authenticateUserFromDatabase(
       body.email,
       body.password,
-      surface
+      surface,
+      clientIp
     );
 
     if (!authResult.ok) {
-      return NextResponse.json({ error: authResult.error }, { status: 401 });
+      return NextResponse.json(
+        { error: authResult.error },
+        { status: authResult.status || 401 }
+      );
     }
 
-    // Optional TOTP MFA verification if mfaCode is supplied
     if (body.mfaCode) {
-      const mfaCheck = verifyTotpOrRecoveryCode(body.mfaCode);
+      const userRow = await prisma.user.findUnique({
+        where: { id: authResult.user.id },
+      });
+      const secret = userRow?.mfaSecret || "RPRMTOTPSECRET2026";
+      const recoveryCodes: string[] = userRow?.recoveryCodesJson
+        ? JSON.parse(userRow.recoveryCodesJson)
+        : [];
+      const mfaCheck = verifyTotpOrRecoveryCode(
+        body.mfaCode,
+        secret,
+        recoveryCodes
+      );
       if (!mfaCheck.valid) {
         return NextResponse.json(
           { error: "Invalid TOTP authenticator or recovery code" },
           { status: 401 }
         );
       }
+      if (mfaCheck.method === "recovery" && userRow) {
+        await prisma.user.update({
+          where: { id: userRow.id },
+          data: {
+            recoveryCodesJson: JSON.stringify(mfaCheck.remainingRecoveryCodes),
+          },
+        });
+      }
     }
 
-    const session = authResult.session;
+    const { sessionRowId, cookieValue, expiresAt } =
+      await createServerSessionRow({
+        userId: authResult.user.id,
+        identityType: authResult.user.identityType,
+      });
+
     await prisma.auditLog.create({
       data: {
-        actor: session.email,
-        actorRole: `${session.identityType} (${session.role})`,
+        actor: authResult.user.email,
+        actorRole: `${authResult.user.identityType} (${authResult.user.role})`,
         action: "AUTH",
         objectType: "Session",
-        objectId: session.userId,
-        summary: `Authenticated ${session.identityType} session for ${session.email} (DB-assigned role: ${session.role})`,
+        objectId: sessionRowId,
+        summary: `Authenticated ${authResult.user.identityType} session ${sessionRowId} for ${authResult.user.email} (DB-assigned role: ${authResult.user.role})`,
       },
     });
 
-    const token = signSessionToken(session);
-    const res = NextResponse.json({ ok: true, session });
-    res.cookies.set("rprm_session", token, {
-      path: "/",
-      httpOnly: true,
-      sameSite: "lax",
-      maxAge: 86400,
-    });
+    const sessionPayload = {
+      sessionId: sessionRowId,
+      userId: authResult.user.id,
+      email: authResult.user.email,
+      name: authResult.user.name,
+      identityType: authResult.user.identityType,
+      role: authResult.user.role,
+      isMainContact: authResult.user.isMainContact,
+      partnerId: authResult.user.partnerId,
+      partnerName: authResult.user.partnerName,
+      impersonatingPartnerId: null,
+      mfaVerified: true,
+      issuedAt: Date.now(),
+      expiresAt: expiresAt.getTime(),
+    };
+
+    const res = NextResponse.json({ ok: true, session: sessionPayload });
+    res.cookies.set("rprm_session", cookieValue, getCookieOptions(86400));
     return res;
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

@@ -510,6 +510,7 @@ export default function ProgramDetailPage() {
                               "REVIEW_PARTNER_APPLICATION",
                               {
                                 partnerId: app.id,
+                                programId: program.id,
                                 mode: "accept_prospect",
                               },
                               `Accepted "${app.name}" as Prospect (entered Prospection pipeline)`
@@ -525,6 +526,7 @@ export default function ProgramDetailPage() {
                               "REVIEW_PARTNER_APPLICATION",
                               {
                                 partnerId: app.id,
+                                programId: program.id,
                                 mode: "accept_active",
                               },
                               `Accepted "${app.name}" as Active Partner & sent activation link!`
@@ -866,9 +868,7 @@ export default function ProgramDetailPage() {
 
                 {Object.entries(permissions).map(([groupName, rules]) => (
                   <div key={groupName} className="space-y-2">
-                    <h4 className="font-bold text-blue-700 uppercase tracking-wider text-[11px]">
-                      {groupName}
-                    </h4>
+                    <h4 className="font-bold text-blue-700 uppercase tracking-wider text-[11px]">{groupName}</h4>
                     <div className="border border-slate-200 rounded-xl overflow-hidden">
                       <table className="w-full text-left border-collapse">
                         <thead>
@@ -876,36 +876,16 @@ export default function ProgramDetailPage() {
                             <th className="py-2 px-3">Permission</th>
                             <th className="py-2 px-3 text-center">Manager</th>
                             <th className="py-2 px-3 text-center">Sales Rep</th>
-                            <th className="py-2 px-3 text-center">
-                              Stakeholder
-                            </th>
+                            <th className="py-2 px-3 text-center">Stakeholder</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {Object.entries(rules).map(([permLabel, roles]) => (
                             <tr key={permLabel}>
-                              <td className="py-2 px-3 font-medium text-slate-800">
-                                {permLabel}
-                              </td>
-                              {(
-                                ["Manager", "SalesRep", "Stakeholder"] as const
-                              ).map((rKey) => (
-                                <td
-                                  key={rKey}
-                                  className="py-2 px-3 text-center"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(roles[rKey])}
-                                    onChange={() =>
-                                      handleTogglePermission(
-                                        groupName,
-                                        permLabel,
-                                        rKey
-                                      )
-                                    }
-                                    className="rounded text-blue-600 cursor-pointer"
-                                  />
+                              <td className="py-2 px-3 font-medium text-slate-800">{permLabel}</td>
+                              {(["Manager", "SalesRep", "Stakeholder"] as const).map((rKey) => (
+                                <td key={rKey} className="py-2 px-3 text-center">
+                                  <input type="checkbox" checked={Boolean(roles[rKey])} onChange={() => handleTogglePermission(groupName, permLabel, rKey)} className="rounded text-blue-600 cursor-pointer" />
                                 </td>
                               ))}
                             </tr>
@@ -1165,6 +1145,115 @@ export default function ProgramDetailPage() {
                 </div>
               </div>
 
+              {/* P5: Visible & Editable Rate Steps in Rule Builder */}
+              {ruleForm.duration === "recurring" && (
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800">
+                      Recurring Rate Steps (e.g. 20% M4–15, 10% M16–27)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRuleForm({
+                          ...ruleForm,
+                          rateSteps: [
+                            ...(ruleForm.rateSteps || []),
+                            { fromMonth: 4, toMonth: 15, ratePct: 20 },
+                          ],
+                        })
+                      }
+                      className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold text-[11px]"
+                    >
+                      + Add Rate Step
+                    </button>
+                  </div>
+                  {(ruleForm.rateSteps || []).length === 0 ? (
+                    <p className="text-[11px] text-slate-500">
+                      No rate steps defined (uses flat rate above for all recurring months). Click &ldquo;+ Add Rate Step&rdquo; to configure stepped rates.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {(ruleForm.rateSteps || []).map((step, sIdx) => (
+                        <div
+                          key={sIdx}
+                          className="grid grid-cols-4 gap-2 items-center bg-white p-2 rounded-lg border border-slate-200"
+                        >
+                          <div>
+                            <label className="block text-[10px] text-slate-500">
+                              From Month
+                            </label>
+                            <input
+                              type="number"
+                              value={step.fromMonth}
+                              onChange={(e) => {
+                                const next = [...(ruleForm.rateSteps || [])];
+                                next[sIdx] = {
+                                  ...next[sIdx],
+                                  fromMonth: Number(e.target.value) || 1,
+                                };
+                                setRuleForm({ ...ruleForm, rateSteps: next });
+                              }}
+                              className="w-full px-2 py-1 border border-slate-300 rounded"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-500">
+                              To Month
+                            </label>
+                            <input
+                              type="number"
+                              value={step.toMonth}
+                              onChange={(e) => {
+                                const next = [...(ruleForm.rateSteps || [])];
+                                next[sIdx] = {
+                                  ...next[sIdx],
+                                  toMonth: Number(e.target.value) || 1,
+                                };
+                                setRuleForm({ ...ruleForm, rateSteps: next });
+                              }}
+                              className="w-full px-2 py-1 border border-slate-300 rounded"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-500">
+                              Rate (%)
+                            </label>
+                            <input
+                              type="number"
+                              value={step.ratePct}
+                              onChange={(e) => {
+                                const next = [...(ruleForm.rateSteps || [])];
+                                next[sIdx] = {
+                                  ...next[sIdx],
+                                  ratePct: Number(e.target.value) || 0,
+                                };
+                                setRuleForm({ ...ruleForm, rateSteps: next });
+                              }}
+                              className="w-full px-2 py-1 border border-slate-300 rounded"
+                            />
+                          </div>
+                          <div className="text-right pt-3">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = (ruleForm.rateSteps || []).filter(
+                                  (_, i) => i !== sIdx
+                                );
+                                setRuleForm({ ...ruleForm, rateSteps: next });
+                              }}
+                              className="px-2 py-1 rounded text-red-600 hover:bg-red-50 font-semibold"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="flex flex-wrap gap-4 pt-1">
                 <label className="flex items-center space-x-2">
                   <input
@@ -1223,27 +1312,11 @@ export default function ProgramDetailPage() {
       {deleteConfirmRuleId && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4 text-xs">
-            <h3 className="font-bold text-base text-slate-900">
-              Delete Commission Rule?
-            </h3>
-            <p className="text-slate-600">
-              Are you sure you want to remove this commission rule from{" "}
-              <strong>{currentLevel?.name}</strong>? Existing historical rewards
-              will not be deleted.
-            </p>
+            <h3 className="font-bold text-base text-slate-900">Delete Commission Rule?</h3>
+            <p className="text-slate-600">Are you sure you want to remove this commission rule from <strong>{currentLevel?.name}</strong>? Existing historical rewards will not be deleted.</p>
             <div className="flex justify-end space-x-2">
-              <button
-                onClick={() => setDeleteConfirmRuleId(null)}
-                className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDeleteRule}
-                className="px-4 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold"
-              >
-                Confirm Delete
-              </button>
+              <button onClick={() => setDeleteConfirmRuleId(null)} className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700">Cancel</button>
+              <button onClick={handleConfirmDeleteRule} className="px-4 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold">Confirm Delete</button>
             </div>
           </div>
         </div>
@@ -1256,71 +1329,28 @@ export default function ProgramDetailPage() {
             onSubmit={async (e) => {
               e.preventDefault();
               if (!rejectionReason.trim()) return;
-              await mutate(
-                "REVIEW_PARTNER_APPLICATION",
-                {
-                  partnerId: rejectPartnerId,
-                  mode: "reject",
-                  rejectionReason,
-                  reapplyAfterDate,
-                },
-                "Partner application rejected with reason & notification email sent"
-              );
+              await mutate("REVIEW_PARTNER_APPLICATION", { partnerId: rejectPartnerId, programId: program.id, mode: "reject", rejectionReason, reapplyAfterDate }, "Partner application rejected with reason & notification email sent");
               setRejectPartnerId(null);
             }}
             className="bg-white rounded-xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden text-xs"
           >
             <div className="px-5 py-4 bg-amber-600 text-white flex items-center justify-between">
-              <h3 className="font-bold text-sm">
-                Reject Partner Application (Reason Required)
-              </h3>
-              <button
-                type="button"
-                onClick={() => setRejectPartnerId(null)}
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <h3 className="font-bold text-sm">Reject Partner Application (Reason Required)</h3>
+              <button type="button" onClick={() => setRejectPartnerId(null)}><X className="w-4 h-4" /></button>
             </div>
             <div className="p-5 space-y-3">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Rejection Reason (sent in rejection email) *
-                </label>
-                <textarea
-                  required
-                  rows={3}
-                  value={rejectionReason}
-                  onChange={(e) => setRejectionReason(e.target.value)}
-                  placeholder="e.g. Minimum regional technical headcount requirement not yet met."
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
+                <label className="block font-semibold text-slate-700 mb-1">Rejection Reason (sent in rejection email) *</label>
+                <textarea required rows={3} value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} placeholder="e.g. Minimum regional technical headcount requirement not yet met." className="w-full px-3 py-2 border border-slate-300 rounded-lg" />
               </div>
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Eligible to re-apply after (optional)
-                </label>
-                <input
-                  type="date"
-                  value={reapplyAfterDate}
-                  onChange={(e) => setReapplyAfterDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
+                <label className="block font-semibold text-slate-700 mb-1">Eligible to re-apply after (optional)</label>
+                <input type="date" value={reapplyAfterDate} onChange={(e) => setReapplyAfterDate(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg" />
               </div>
             </div>
             <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
-              <button
-                type="button"
-                onClick={() => setRejectPartnerId(null)}
-                className="px-3 py-1.5 rounded-lg text-slate-600"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold"
-              >
-                Confirm Rejection
-              </button>
+              <button type="button" onClick={() => setRejectPartnerId(null)} className="px-3 py-1.5 rounded-lg text-slate-600">Cancel</button>
+              <button type="submit" className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold">Confirm Rejection</button>
             </div>
           </form>
         </div>

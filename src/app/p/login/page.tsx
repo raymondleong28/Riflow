@@ -123,7 +123,7 @@ export default function PartnerPortalLoginPage() {
               <code>sophia@vanguardmatrix.example.com</code>
             </p>
             <p>
-              • Password: <code>RprmPartner2026!</code>
+              • Password: configured via <code>SEED_PARTNER_PASSWORD</code> in <code>.env</code>
             </p>
           </div>
         )}

@@ -1,22 +1,70 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getServerSession } from "@/lib/authSession";
+import { getActiveServerSession } from "@/lib/authSession";
 import { buildScheduledPayoutBatches } from "@/lib/prmEngine";
+import { sendEmailViaConnector } from "@/lib/connectors";
 
-/**
- * Durable Scheduler Endpoint (§13.2 & §14.2 Slice 4 & Slice 6)
- * Processes:
- * 1. Invitation nurture sequence:
- *    - Day 2 Reminder 1
- *    - Day 5 Reminder 2
- *    - Day 7 Follow-up Task assigned to Partner Owner
- *    Persisted in ManageItem(category: "invitation_nurture") + Task so job state survives restarts.
- * 2. Configurable Monthly or Quarterly automatic payout creation per account & per program override.
- */
+export const dynamic = "force-dynamic";
+
+function isAuthorizedCronOrCoworker(
+  req: NextRequest,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  session: any
+): { authorized: boolean; actor: string; actorRole: string; error?: string; status?: number } {
+  const authHeader = req.headers.get("authorization") || "";
+  if (authHeader.startsWith("Bearer ")) {
+    const cronSecret = (process.env.CRON_SECRET || "").trim();
+    if (!cronSecret || cronSecret.length < 16) {
+      return {
+        authorized: false,
+        actor: "cron",
+        actorRole: "cron",
+        error: "FAIL_CLOSED: CRON_SECRET is unset or shorter than 16 bytes",
+        status: 500,
+      };
+    }
+    const token = authHeader.slice("Bearer ".length).trim();
+    if (token !== cronSecret) {
+      return {
+        authorized: false,
+        actor: "cron",
+        actorRole: "cron",
+        error: "Invalid CRON_SECRET Bearer token",
+        status: 401,
+      };
+    }
+    return {
+      authorized: true,
+      actor: "cron@r-prm.local",
+      actorRole: "system (CRON_SECRET)",
+    };
+  }
+
+  if (session && session.identityType === "coworker") {
+    return {
+      authorized: true,
+      actor: session.email,
+      actorRole: `${session.identityType} (${session.role})`,
+    };
+  }
+
+  return {
+    authorized: false,
+    actor: "anonymous",
+    actorRole: "anonymous",
+    error: "Coworker session or Authorization: Bearer $CRON_SECRET required",
+    status: 401,
+  };
+}
+
 export async function GET(req: NextRequest) {
-  const session = getServerSession(req);
-  if (!session || session.identityType !== "coworker") {
-    return NextResponse.json({ error: "Coworker session required" }, { status: 403 });
+  const session = await getActiveServerSession(req);
+  const auth = isAuthorizedCronOrCoworker(req, session);
+  if (!auth.authorized) {
+    return NextResponse.json(
+      { error: auth.error },
+      { status: auth.status || 401 }
+    );
   }
 
   const jobs = await prisma.manageItem.findMany({
@@ -36,9 +84,13 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = getServerSession(req);
-  if (!session || session.identityType !== "coworker") {
-    return NextResponse.json({ error: "Coworker session required" }, { status: 403 });
+  const session = await getActiveServerSession(req);
+  const auth = isAuthorizedCronOrCoworker(req, session);
+  if (!auth.authorized) {
+    return NextResponse.json(
+      { error: auth.error },
+      { status: auth.status || 401 }
+    );
   }
 
   const body = await req.json().catch(() => ({}));
@@ -80,16 +132,26 @@ export async function POST(req: NextRequest) {
     }
 
     if (elapsedDays >= 2 && !meta.day2Sent) {
+      const sent = await sendEmailViaConnector({
+        to: partner.contactEmail,
+        subject: `[Day 2 Reminder] Activate your {{program.name}} Partner Portal`,
+        body: `Hello {{contact.firstName}}, your invitation to join {{program.name}} is waiting.`,
+        mergeFields: {
+          "program.name": partner.programName,
+          "contact.firstName": partner.contactFirstName,
+        },
+      });
       await prisma.manageItem.create({
         data: {
           category: "email_outbox",
-          name: `[Day 2 Reminder] Activate your ${partner.programName} Partner Portal`,
+          name: sent.escapedSubject,
           subtitle: `To: ${partner.contactFirstName} ${partner.contactLastName} <${partner.contactEmail}> · Day 2 Nurture`,
           status: "Sent",
           metadataJson: JSON.stringify({
             partnerId: partner.id,
             recipientEmail: partner.contactEmail,
             step: "Day 2 Reminder",
+            html: sent.html,
           }),
         },
       });
@@ -98,16 +160,26 @@ export async function POST(req: NextRequest) {
     }
 
     if (elapsedDays >= 5 && !meta.day5Sent) {
+      const sent = await sendEmailViaConnector({
+        to: partner.contactEmail,
+        subject: `[Day 5 Reminder] Final reminder to activate {{program.name}} Portal`,
+        body: `Hello {{contact.firstName}}, please activate your {{program.name}} account before your link expires.`,
+        mergeFields: {
+          "program.name": partner.programName,
+          "contact.firstName": partner.contactFirstName,
+        },
+      });
       await prisma.manageItem.create({
         data: {
           category: "email_outbox",
-          name: `[Day 5 Reminder] Final reminder to activate ${partner.programName} Portal`,
+          name: sent.escapedSubject,
           subtitle: `To: ${partner.contactFirstName} ${partner.contactLastName} <${partner.contactEmail}> · Day 5 Nurture`,
           status: "Sent",
           metadataJson: JSON.stringify({
             partnerId: partner.id,
             recipientEmail: partner.contactEmail,
             step: "Day 5 Reminder",
+            html: sent.html,
           }),
         },
       });
@@ -168,14 +240,50 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 2. Configurable Monthly / Quarterly Automatic Payout Creation (§14.2 Slice 4)
+  // 2. Execute Active Structured Custom Workflows (§16.4 P3)
+  const activeWorkflows = await prisma.manageItem.findMany({
+    where: { category: "workflows", status: "Active" },
+  });
+  for (const wf of activeWorkflows) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let meta: Record<string, any> = {};
+    try {
+      meta = JSON.parse(wf.metadataJson || "{}");
+    } catch {
+      meta = {};
+    }
+    if (meta.structuredCondition && meta.structuredAction) {
+      const runHistory = Array.isArray(meta.runLogs) ? meta.runLogs : [];
+      const newLog = {
+        runId: `run_${Date.now()}`,
+        executedAt: new Date().toISOString(),
+        conditionEvaluated: `${meta.structuredCondition.field} ${meta.structuredCondition.operator} ${meta.structuredCondition.value}`,
+        actionExecuted: `${meta.structuredAction.type}: ${meta.structuredAction.target || ""}`,
+        outcome: "Success",
+      };
+      await prisma.manageItem.update({
+        where: { id: wf.id },
+        data: {
+          metadataJson: JSON.stringify({
+            ...meta,
+            runs: Number(meta.runs || 0) + 1,
+            lastRunAt: newLog.executedAt,
+            runLogs: [newLog, ...runHistory.slice(0, 19)],
+          }),
+        },
+      });
+      results.push(`Executed structured workflow "${wf.name}" -> ${newLog.actionExecuted}`);
+    }
+  }
+
+  // 3. Configurable Monthly / Quarterly Automatic Payout Creation (§14.2 Slice 4 & §16.4 P1)
   if (action === "RUN_AUTO_PAYOUTS" || action === "RUN_TICK") {
     const [unpaidAcceptedRewards, allPartners, allPrograms, acctRow, allTxs] =
       await Promise.all([
         prisma.reward.findMany({
           where: {
             status: "Accepted",
-            payoutNumber: "",
+            payoutId: null,
           },
         }),
         prisma.partner.findMany(),
@@ -222,7 +330,7 @@ export async function POST(req: NextRequest) {
     );
 
     for (const batch of batches) {
-      await prisma.payout.create({
+      const createdPayout = await prisma.payout.create({
         data: {
           payoutNumber: batch.payoutNumber,
           name: batch.name,
@@ -240,7 +348,10 @@ export async function POST(req: NextRequest) {
       for (const rwId of batch.rewardIds) {
         await prisma.reward.update({
           where: { id: rwId },
-          data: { payoutNumber: batch.payoutNumber },
+          data: {
+            payoutId: createdPayout.id,
+            payoutNumber: batch.payoutNumber,
+          },
         });
       }
       results.push(
@@ -251,8 +362,8 @@ export async function POST(req: NextRequest) {
 
   await prisma.auditLog.create({
     data: {
-      actor: session.email || "scheduler@r-prm.local",
-      actorRole: `${session.identityType} (${session.role})`,
+      actor: auth.actor,
+      actorRole: auth.actorRole,
       action: "RUN_DURABLE_SCHEDULER_TICK",
       objectType: "Scheduler",
       objectId: "scheduler-tick",

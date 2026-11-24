@@ -7,14 +7,16 @@
     "build": "next build",
     "start": "next start -H 127.0.0.1",
     "test": "tsx tests/parity-fixtures.test.ts",
-    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
-    "db:setup": "prisma generate && prisma db push && tsx prisma/seed.ts"
+    "db:setup": "prisma generate && prisma migrate deploy && tsx prisma/seed.ts",
+    "scheduler": "tsx scripts/run-scheduler.ts"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",
     "lucide-react": "^0.454.0",
-    "next": "14.2.15",
+    "next": "^14.2.35",
     "nodemailer": "^10.6.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

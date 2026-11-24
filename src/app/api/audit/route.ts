@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getServerSession } from "@/lib/authSession";
+import { getActiveServerSession } from "@/lib/authSession";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const session = getServerSession(req);
+  const session = await getActiveServerSession(req);
   if (!session) {
     return NextResponse.json(
       {

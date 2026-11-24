@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { usePrm } from "@/context/PrmContext";
 import { StatusBadge } from "@/components/SharedEngines";
+import { ManageFormState, ManageModals } from "@/components/ManageModals";
 import {
   FolderOpen,
   Award,
@@ -20,22 +21,18 @@ import {
   Workflow,
   Plus,
   Bell,
-  Check,
-  X,
-  Upload,
   Download,
   Edit3,
   Trash2,
   Send,
   Play,
   Paperclip,
-  ExternalLink,
 } from "lucide-react";
 
 const MANAGE_MODULES = [
   { id: "assets", title: "Assets", desc: "Upload & share docs, contracts & training videos with partners", icon: FolderOpen, cta: "Add asset" },
   { id: "certifications", title: "Certifications", desc: "Manage partner certifications, exams, validity & awards", icon: Award, cta: "New certification" },
-  { id: "email_setup", title: "Email setup", desc: "Custom domain CNAMEs & live Gmail SMTP server config", icon: MailCheck, cta: "Save Email Setup" },
+  { id: "email_setup", title: "Email setup", desc: "Custom domain CNAMEs & environment SMTP connector status", icon: MailCheck, cta: "Email Setup" },
   { id: "email_templates", title: "Email templates", desc: "Edit subject, merge tags, HTML body & test-send 11 templates", icon: FileText, cta: "Add a new template" },
   { id: "groups", title: "Groups", desc: "Segment partners, assign members & compare 14 KPIs", icon: Users, cta: "Add a new group" },
   { id: "help_articles", title: "Help Center", desc: "Manage Partner Portal Articles & Collections with attachments", icon: BookOpen, cta: "Add article" },
@@ -59,40 +56,47 @@ function parseMeta(jsonStr?: string): Record<string, any> {
   }
 }
 
+function normalizeFileUrl(url?: string, fallbackName?: string): string {
+  if (!url) {
+    return fallbackName?.includes("Agreement")
+      ? "/api/files/Master_Reseller_Agreement_Template.txt"
+      : "/api/files/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
+  }
+  if (url.startsWith("/uploads/")) {
+    return `/api/files/${url.replace(/^\/uploads\//, "")}`;
+  }
+  return url;
+}
+
 export default function ManageHubPage() {
-  const { manageItems, partners, programs, settings, mutate, showToast } = usePrm();
+  const { manageItems, partners, programs, settings, mutate, showToast, refresh } = usePrm();
   const [selectedTool, setSelectedTool] = useState<string>("assets");
 
-  // Sub-filters
   const [assetFolder, setAssetFolder] = useState<string>("All");
   const [helpSubTab, setHelpSubTab] = useState<"Articles" | "Collections">("Articles");
 
-  // Create / Edit Item Modal State
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  // Rich form state supporting all 14 sub-modules + real file attachment
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<ManageFormState>({
     name: "",
     subtitle: "",
     status: "Active",
-    // File attachment fields
     fileName: "",
     fileUrl: "",
     fileSize: "",
     mimeType: "",
-    // Module-specific fields
     folder: "Sales Collateral",
     programVisibility: "All Programs",
     validityMonths: "24",
     passingScore: "85%",
-    awardedPartners: [] as string[],
+    awardedPartners: [],
     emailSubject: "Welcome to R-PRM, {{partner.name}}!",
     emailTrigger: "On partner signup",
     emailBody:
       "Hi {{contact.first_name}},\n\nWelcome to {{program.name}}! Your partner portal is ready. Log in anytime to register deals, submit leads, and download enablement assets.\n\nBest regards,\nThe R-Cloud Channel Team",
-    groupPartnerIds: [] as string[],
+    groupPartnerIds: [],
     collection: "Getting Started for Partners",
     articleBody:
       "Step 1: Open your Partner Portal.\nStep 2: Navigate to Deals > Register Deal.\nStep 3: Submit client details for 90-day deal protection.",
@@ -107,8 +111,13 @@ export default function ManageHubPage() {
     coworkerPhone: "+65 9100 3300",
     coworkerRole: "Manager",
     workflowTrigger: "Deal Stage moves to Closed Won",
-    workflowCondition: "Deal Amount >= SGD 5,000",
-    workflowAction: "Auto-Create 18% Pending Commission Reward & Notify Slack",
+    workflowCondition: "status == Active",
+    workflowAction: "create_task: Follow up on partner milestone",
+    conditionField: "status",
+    conditionOperator: "equals",
+    conditionValue: "Active",
+    actionType: "create_task",
+    actionTarget: "Follow up on partner milestone",
     pipelineStages:
       "Kickoff Welcome Call, Book a Demo Account Training, Technical Certification, Completed",
     dashboardWidgets: [
@@ -121,13 +130,11 @@ export default function ManageHubPage() {
     ],
   });
 
-  // Award Certification Modal State
   const [awardModalCertId, setAwardModalCertId] = useState<string | null>(null);
   const [selectedPartnerToAward, setSelectedPartnerToAward] = useState<string>(
     "Apex Cloud Solutions Pte Ltd"
   );
 
-  // Notify Partners Modal State
   const [notifyModalOpen, setNotifyModalOpen] = useState(false);
   const [notifyTargetEmail, setNotifyTargetEmail] = useState(
     "jordan.lee@apexcloud.example.com"
@@ -136,14 +143,15 @@ export default function ManageHubPage() {
     "We have uploaded new 2026 Partner Enablement assets and pitch decks to your Partner Portal."
   );
 
-  // Email Setup & Gmail SMTP State
-  const savedSmtp = settings.smtp_config || {};
+  // Email Setup State (S12: credentials live only in server env, never stored in AppSetting)
+  const emailConnectorStatus = settings.email_connector_status || {
+    driver: "local",
+    smtpConfigured: false,
+    smtpHost: null,
+    smtpPort: null,
+  };
   const [emailDomain, setEmailDomain] = useState("@partners.r-cloud.co");
   const [emailPrefix, setEmailPrefix] = useState("alliances");
-  const [gmailUser, setGmailUser] = useState(savedSmtp.gmailUser || "");
-  const [gmailAppPassword, setGmailAppPassword] = useState(
-    savedSmtp.gmailAppPassword || ""
-  );
   const [testEmailRecipient, setTestEmailRecipient] = useState(
     "jordan.lee@apexcloud.example.com"
   );
@@ -158,12 +166,22 @@ export default function ManageHubPage() {
       ...form,
       name: "",
       subtitle: "",
-      status: selectedTool === "assets" || selectedTool === "news" || selectedTool === "help_articles" ? "Published" : "Active",
+      status:
+        selectedTool === "assets" ||
+        selectedTool === "news" ||
+        selectedTool === "help_articles"
+          ? "Published"
+          : "Active",
       fileName: "",
       fileUrl: "",
       fileSize: "",
       mimeType: "",
       coworkerEmail: "",
+      conditionField: "status",
+      conditionOperator: "equals",
+      conditionValue: "Active",
+      actionType: "create_task",
+      actionTarget: "Follow up with Partner Manager",
     });
     setModalOpen(true);
   };
@@ -171,18 +189,17 @@ export default function ManageHubPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const openEditModal = (item: any) => {
     const meta = parseMeta(item.metadataJson);
+    const sc = meta.structuredCondition || {};
+    const sa = meta.structuredAction || {};
     setEditingId(item.id);
     setForm({
       ...form,
       name: item.name || "",
       subtitle: item.subtitle || "",
       status: item.status || "Active",
-      fileName: meta.fileName || (item.category === "assets" ? `${item.name}.pdf` : ""),
-      fileUrl:
-        meta.fileUrl ||
-        (item.name.includes("Agreement")
-          ? "/uploads/Master_Reseller_Agreement_Template.txt"
-          : "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf"),
+      fileName:
+        meta.fileName || (item.category === "assets" ? `${item.name}.pdf` : ""),
+      fileUrl: normalizeFileUrl(meta.fileUrl, item.name),
       fileSize: meta.fileSize || "2.4 MB",
       mimeType: meta.mimeType || "application/pdf",
       folder: meta.folder || "Sales Collateral",
@@ -219,10 +236,14 @@ export default function ManageHubPage() {
       coworkerTitle: meta.jobTitle || "Partner Account Manager",
       coworkerPhone: meta.phone || "+65 9100 2200",
       coworkerRole: meta.role || item.status || "Manager",
-      workflowTrigger: meta.trigger || "Deal Closed Won",
-      workflowCondition: meta.condition || "All Partner Programs",
-      workflowAction:
-        meta.action || "Generate Commission Reward & Send Notification",
+      workflowTrigger: meta.trigger || "Deal Stage moves to Closed Won",
+      workflowCondition: meta.condition || "status == Active",
+      workflowAction: meta.action || "create_task: Follow up",
+      conditionField: sc.field || "status",
+      conditionOperator: sc.operator || "equals",
+      conditionValue: sc.value || "Active",
+      actionType: sa.type || "create_task",
+      actionTarget: sa.target || item.name,
       pipelineStages: Array.isArray(meta.stages)
         ? meta.stages.join(", ")
         : "Kickoff Welcome Call, Book a Demo Account Training, Technical Certification, Completed",
@@ -258,6 +279,8 @@ export default function ManageHubPage() {
           mimeType: json.mimeType,
         }));
         showToast(`Attached file "${json.fileName}" (${json.fileSize})`);
+      } else {
+        showToast(json.error || "File upload rejected");
       }
     } catch (err) {
       console.error(err);
@@ -270,8 +293,17 @@ export default function ManageHubPage() {
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    const structuredCondition = {
+      field: form.conditionField,
+      operator: form.conditionOperator,
+      value: form.conditionValue,
+    };
+    const structuredAction = {
+      type: form.actionType,
+      target: form.actionTarget,
+    };
+
     let computedSubtitle = form.subtitle;
-    // Build informative subtitle per module if not manually overridden
     if (selectedTool === "assets") {
       computedSubtitle = `${form.folder} · ${form.fileSize || "1.8 MB"} · ${
         form.programVisibility
@@ -291,7 +323,7 @@ export default function ManageHubPage() {
     } else if (selectedTool === "team") {
       computedSubtitle = `${form.coworkerEmail} · ${form.coworkerTitle} · ${form.coworkerPhone}`;
     } else if (selectedTool === "workflows") {
-      computedSubtitle = `Trigger: ${form.workflowTrigger} → Action: ${form.workflowAction}`;
+      computedSubtitle = `WHEN ${form.workflowTrigger} IF ${structuredCondition.field} ${structuredCondition.operator} ${structuredCondition.value} THEN ${structuredAction.type} (${structuredAction.target})`;
     } else if (selectedTool === "onboarding_pipelines") {
       const stagesArr = form.pipelineStages
         .split(",")
@@ -304,7 +336,7 @@ export default function ManageHubPage() {
 
     const metadata = {
       fileName: form.fileName,
-      fileUrl: form.fileUrl || "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf",
+      fileUrl: normalizeFileUrl(form.fileUrl, form.name),
       fileSize: form.fileSize || "1.8 MB",
       mimeType: form.mimeType || "application/pdf",
       folder: form.folder,
@@ -330,8 +362,10 @@ export default function ManageHubPage() {
       jobTitle: form.coworkerTitle,
       phone: form.coworkerPhone,
       role: form.coworkerRole,
-      condition: form.workflowCondition,
-      action: form.workflowAction,
+      condition: `${structuredCondition.field} ${structuredCondition.operator} ${structuredCondition.value}`,
+      action: `${structuredAction.type}: ${structuredAction.target}`,
+      structuredCondition,
+      structuredAction,
       stages: form.pipelineStages
         .split(",")
         .map((s) => s.trim())
@@ -348,8 +382,7 @@ export default function ManageHubPage() {
           id: editingId,
           name: form.name,
           subtitle: computedSubtitle,
-          status:
-            selectedTool === "team" ? form.coworkerRole : form.status,
+          status: selectedTool === "team" ? form.coworkerRole : form.status,
           metadata,
         },
         `Updated "${form.name}" in ${activeMod.title}!`
@@ -361,8 +394,7 @@ export default function ManageHubPage() {
           category: selectedTool,
           name: form.name,
           subtitle: computedSubtitle,
-          status:
-            selectedTool === "team" ? form.coworkerRole : form.status,
+          status: selectedTool === "team" ? form.coworkerRole : form.status,
           metadata,
         },
         `Created "${form.name}" in ${activeMod.title}!`
@@ -389,7 +421,6 @@ export default function ManageHubPage() {
     setEditingId(null);
   };
 
-  // Award Certification to Partner
   const handleAwardCertification = async (e: React.FormEvent) => {
     e.preventDefault();
     const cert = items.find((i) => i.id === awardModalCertId);
@@ -420,24 +451,24 @@ export default function ManageHubPage() {
     setAwardModalCertId(null);
   };
 
-  const handleSaveSmtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await mutate(
-      "SAVE_SETTING",
-      {
-        key: "smtp_config",
-        value: {
-          gmailUser,
-          gmailAppPassword,
-          emailDomain,
-          emailPrefix,
-          enabled: Boolean(gmailUser && gmailAppPassword),
-        },
-      },
-      gmailUser
-        ? `Gmail SMTP (${gmailUser}) saved and active!`
-        : "Email domain settings saved (using In-App Outbox Sandbox)"
-    );
+  const handleRunWorkflowNow = async (workflowId: string, workflowName: string) => {
+    try {
+      const res = await fetch("/api/scheduler", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job: "custom_workflows", workflowId }),
+      });
+      const json = await res.json();
+      await refresh();
+      if (json.ok) {
+        const executed = json.results?.custom_workflows?.workflowsExecuted || 0;
+        showToast(`Executed workflow "${workflowName}" via durable scheduler (${executed} run logged)!`);
+      } else {
+        showToast(json.error || "Failed to execute workflow");
+      }
+    } catch {
+      showToast("Error executing workflow");
+    }
   };
 
   const handleSendTestEmail = async () => {
@@ -446,7 +477,7 @@ export default function ManageHubPage() {
       subject: "R-PRM Test Email — Partner Portal & SMTP Verification",
       body: `Hello!\n\nThis is a live test email from R-PRM (${emailPrefix}${emailDomain}).\n\nYou can click the button below to open the interactive Partner Portal.`,
       templateName: "SMTP Verification Test",
-      portalLink: "/portal",
+      portalLink: "/p",
     });
     showToast(
       res?.deliveryMode || "Test email sent & logged to In-App Outbox!"
@@ -461,7 +492,7 @@ export default function ManageHubPage() {
             Manage Workspace &amp; Partner Portal (14 Modules)
           </h1>
           <p className="text-xs text-slate-500">
-            Full Create, Edit, File Attachment Upload/Download, Certification Awarding &amp; Gmail SMTP Config
+            Full Create, Edit, Private File Attachment Upload/Download, Certification Awarding &amp; Environment Email Connector
           </p>
         </div>
       </div>
@@ -528,18 +559,27 @@ export default function ManageHubPage() {
                     "CREATE_MANAGE_ITEM",
                     {
                       category: "workflows",
-                      name: "Template: Auto-Upgrade Partner to Gold When Sourced Revenue >= SGD 50K",
+                      name: "Template: Auto-Create Task When Active Partner Reaches Gold",
                       subtitle:
-                        "Trigger: Sourced Revenue Milestone → Action: Upgrade Tier Level & Send Email",
+                        "WHEN Partner Properties Changed IF status equals Active THEN create_task (Schedule Executive QBR)",
                       status: "Active",
                       metadata: {
-                        trigger: "Partner Sourced Revenue >= SGD 50,000",
-                        condition: "Partner Status == Active",
-                        action: "Upgrade to Gold Tier & Send Congratulations Email",
-                        runs: 8,
+                        trigger: "Partner Properties Changed",
+                        condition: "status equals Active",
+                        action: "create_task: Schedule Executive QBR",
+                        structuredCondition: {
+                          field: "status",
+                          operator: "equals",
+                          value: "Active",
+                        },
+                        structuredAction: {
+                          type: "create_task",
+                          target: "Schedule Executive QBR",
+                        },
+                        runs: 0,
                       },
                     },
-                    "Workflow created from template!"
+                    "Structured workflow created from template!"
                   )
                 }
                 className="px-3 py-2 rounded-lg border border-blue-600 text-blue-700 bg-blue-50 hover:bg-blue-100 text-xs font-semibold"
@@ -559,7 +599,7 @@ export default function ManageHubPage() {
           </div>
         </div>
 
-        {/* 1. ASSETS SUB-MODULE (Folders + File Upload + Edit + Download) */}
+        {/* 1. ASSETS SUB-MODULE */}
         {selectedTool === "assets" && (
           <div className="space-y-4 text-xs">
             <div className="flex flex-wrap items-center gap-2">
@@ -605,11 +645,7 @@ export default function ManageHubPage() {
                     })
                     .map((item) => {
                       const meta = parseMeta(item.metadataJson);
-                      const fileUrl =
-                        meta.fileUrl ||
-                        (item.name.includes("Agreement")
-                          ? "/uploads/Master_Reseller_Agreement_Template.txt"
-                          : "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf");
+                      const fileUrl = normalizeFileUrl(meta.fileUrl, item.name);
                       const fileName =
                         meta.fileName ||
                         fileUrl.split("/").pop() ||
@@ -689,7 +725,7 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 2. CERTIFICATIONS SUB-MODULE (Validity, Exam Attachment, Award to Partner, Edit) */}
+        {/* 2. CERTIFICATIONS SUB-MODULE */}
         {selectedTool === "certifications" && (
           <div className="border border-slate-200 rounded-xl overflow-x-auto text-xs">
             <table className="w-full text-left border-collapse">
@@ -713,9 +749,7 @@ export default function ManageHubPage() {
                         "Apex Cloud Solutions Pte Ltd",
                         "NovaBridge Digital Systems",
                       ];
-                  const fileUrl =
-                    meta.fileUrl ||
-                    "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
+                  const fileUrl = normalizeFileUrl(meta.fileUrl, cert.name);
                   const fileName =
                     meta.fileName || "Certification_Study_Guide.pdf";
                   return (
@@ -794,70 +828,56 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 3. EMAIL SETUP SUB-MODULE (Custom Domain CNAMEs + Live Gmail SMTP Connector) */}
+        {/* 3. EMAIL SETUP SUB-MODULE (S12: Credentials live only in server env) */}
         {selectedTool === "email_setup" && (
           <div className="space-y-6 text-xs">
-            {/* Live Gmail SMTP Connector Card */}
-            <form
-              onSubmit={handleSaveSmtp}
-              className="p-5 rounded-xl border-2 border-blue-200 bg-blue-50/40 space-y-4"
-            >
+            <div className="p-5 rounded-xl border-2 border-blue-200 bg-blue-50/50 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <span className="px-2 py-0.5 rounded bg-blue-600 text-white text-[10px] font-bold uppercase">
-                    Live Email Delivery
-                  </span>
-                  <h3 className="font-bold text-sm text-slate-900 mt-1">
-                    Gmail SMTP Server Configuration (smtp.gmail.com)
+                  <h3 className="font-bold text-sm text-blue-900">
+                    Outbound Email Connector Status (Server Environment)
                   </h3>
                   <p className="text-slate-600">
-                    Enter your Gmail address and a 16-character Google App
-                    Password to send real outbound emails. If left blank, all
-                    emails are safely captured in the In-App Email Outbox.
+                    For security, SMTP passwords are never stored in database settings or returned by API responses. Configure <code>EMAIL_DRIVER</code>, <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USER</code>, and <code>SMTP_PASS</code> in server environment variables.
                   </p>
                 </div>
                 <StatusBadge
                   status={
-                    gmailUser && gmailAppPassword ? "Connected" : "In-App Sandbox"
+                    emailConnectorStatus.driver === "smtp" &&
+                    emailConnectorStatus.smtpConfigured
+                      ? "Active"
+                      : "Pending"
                   }
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-3.5 rounded-lg border border-blue-100">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Your Gmail Address
-                  </label>
-                  <input
-                    type="email"
-                    value={gmailUser}
-                    onChange={(e) => setGmailUser(e.target.value)}
-                    placeholder="yourname@gmail.com"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
-                  />
+                  <span className="text-slate-500 block">EMAIL_DRIVER</span>
+                  <span className="font-bold text-slate-900 font-mono">
+                    {emailConnectorStatus.driver || "local"}
+                  </span>
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Google 16-Character App Password
-                  </label>
-                  <input
-                    type="password"
-                    value={gmailAppPassword}
-                    onChange={(e) => setGmailAppPassword(e.target.value)}
-                    placeholder="xxxx xxxx xxxx xxxx (from myaccount.google.com/apppasswords)"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
-                  />
+                  <span className="text-slate-500 block">SMTP Server</span>
+                  <span className="font-bold text-slate-900 font-mono">
+                    {emailConnectorStatus.smtpConfigured
+                      ? `${emailConnectorStatus.smtpHost}:${emailConnectorStatus.smtpPort}`
+                      : "Not configured (using In-App Outbox Sandbox)"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Credentials Storage</span>
+                  <span className="font-semibold text-emerald-700">
+                    Environment-only (Redacted from API)
+                  </span>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-blue-200">
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold"
-                >
-                  Save Gmail SMTP Settings
-                </button>
-
+                <span className="text-[11px] text-slate-600">
+                  Every outbound email is logged to the Top Bar Outbox and delivered via the configured driver.
+                </span>
                 <div className="flex items-center space-x-2">
                   <input
                     value={testEmailRecipient}
@@ -868,115 +888,62 @@ export default function ManageHubPage() {
                   <button
                     type="button"
                     onClick={handleSendTestEmail}
-                    className="px-3.5 py-1.5 rounded-lg border border-blue-600 text-blue-700 bg-white hover:bg-blue-50 font-semibold flex items-center space-x-1"
+                    className="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-semibold flex items-center space-x-1"
                   >
                     <Send className="w-3.5 h-3.5" />
                     <span>Send Test Email</span>
                   </button>
                 </div>
               </div>
-            </form>
+            </div>
 
             {/* Custom Sending Domain & 3 CNAME Records */}
-            <div className="space-y-4">
-              <h3 className="font-bold text-sm text-slate-900">
-                Custom Sending Domain &amp; CNAME Verification
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <h3 className="font-bold text-sm text-slate-900">Custom Sending Domain &amp; CNAME Verification</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Custom sending domain
-                  </label>
-                  <input
-                    value={emailDomain}
-                    onChange={(e) => setEmailDomain(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
+                  <label className="block font-semibold text-slate-700 mb-1">Custom sending domain</label>
+                  <input value={emailDomain} onChange={(e) => setEmailDomain(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg" />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Send Emails from prefix
-                  </label>
+                  <label className="block font-semibold text-slate-700 mb-1">Send Emails from prefix</label>
                   <div className="flex items-center space-x-2">
-                    <input
-                      value={emailPrefix}
-                      onChange={(e) => setEmailPrefix(e.target.value)}
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                    <span className="text-slate-500 font-medium">
-                      {emailDomain}
-                    </span>
+                    <input value={emailPrefix} onChange={(e) => setEmailPrefix(e.target.value)} className="flex-1 px-3 py-2 border border-slate-300 rounded-lg" />
+                    <span className="text-slate-500 font-medium">{emailDomain}</span>
                   </div>
                 </div>
               </div>
-
               <div className="border border-slate-200 rounded-xl overflow-hidden">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                      <th className="py-2.5 px-4">Type</th>
-                      <th className="py-2.5 px-4">Host / Name</th>
-                      <th className="py-2.5 px-4">Value / Target</th>
-                      <th className="py-2.5 px-4">Validation status</th>
+                      <th className="py-2 px-4">Type</th>
+                      <th className="py-2 px-4">Host / Name</th>
+                      <th className="py-2 px-4">Value / Target</th>
+                      <th className="py-2 px-4">Validation status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {[
-                      {
-                        host: "em8412.partners.r-cloud.co",
-                        val: "u2948102.wl028.sendgrid.net",
-                      },
-                      {
-                        host: "s1._domainkey.partners.r-cloud.co",
-                        val: "s1.domainkey.u2948102.wl028.sendgrid.net",
-                      },
-                      {
-                        host: "s2._domainkey.partners.r-cloud.co",
-                        val: "s2.domainkey.u2948102.wl028.sendgrid.net",
-                      },
+                      { host: "em8412.partners.r-cloud.co", val: "u2948102.wl028.sendgrid.net" },
+                      { host: "s1._domainkey.partners.r-cloud.co", val: "s1.domainkey.u2948102.wl028.sendgrid.net" },
+                      { host: "s2._domainkey.partners.r-cloud.co", val: "s2.domainkey.u2948102.wl028.sendgrid.net" },
                     ].map((r) => (
                       <tr key={r.host}>
-                        <td className="py-2.5 px-4 font-bold text-blue-700">
-                          CNAME
-                        </td>
-                        <td className="py-2.5 px-4 font-mono text-slate-800">
-                          {r.host}
-                        </td>
-                        <td className="py-2.5 px-4 font-mono text-slate-600">
-                          {r.val}
-                        </td>
-                        <td className="py-2.5 px-4">
-                          <StatusBadge status="Active" />
-                        </td>
+                        <td className="py-2 px-4 font-bold text-blue-700">CNAME</td>
+                        <td className="py-2 px-4 font-mono text-slate-800">{r.host}</td>
+                        <td className="py-2 px-4 font-mono text-slate-600">{r.val}</td>
+                        <td className="py-2 px-4"><StatusBadge status="Active" /></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-
-              <div className="flex items-center space-x-3">
-                <button
-                  onClick={() =>
-                    showToast("All 3 CNAME DNS records verified and active!")
-                  }
-                  className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold"
-                >
-                  I&apos;ve added these records
-                </button>
-                <button
-                  onClick={() =>
-                    showToast("Custom sending domain removed (reverted to default)")
-                  }
-                  className="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 font-medium"
-                >
-                  Remove sending domain
-                </button>
-              </div>
             </div>
           </div>
         )}
 
-        {/* 4. EMAIL TEMPLATES SUB-MODULE (Name, Description, Subject, Edit & Test Send) */}
+        {/* 4. EMAIL TEMPLATES SUB-MODULE */}
         {selectedTool === "email_templates" && (
           <div className="border border-slate-200 rounded-xl overflow-x-auto text-xs">
             <table className="w-full text-left border-collapse">
@@ -1022,7 +989,7 @@ export default function ManageHubPage() {
                                   meta.emailBody ||
                                   `Sample test delivery of template "${tpl.name}".`,
                                 templateName: tpl.name,
-                                portalLink: "/portal",
+                                portalLink: "/p",
                               },
                               `Sent test email "${tpl.name}" (view in Top Bar Outbox)!`
                             )
@@ -1060,100 +1027,52 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 5. GROUPS SUB-MODULE (14 Performance Metric Columns + Edit Group & Assign Partners) */}
+        {/* 5. GROUPS SUB-MODULE */}
         {selectedTool === "groups" && (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 whitespace-nowrap">
-                  <th className="py-2.5 px-3">Name</th>
-                  <th className="py-2.5 px-3 text-right">Partners</th>
-                  <th className="py-2.5 px-3 text-right">Submitted leads</th>
-                  <th className="py-2.5 px-3 text-right">
-                    Refused leads % (sourced)
-                  </th>
-                  <th className="py-2.5 px-3 text-right">
-                    Converted leads (sourced)
-                  </th>
-                  <th className="py-2.5 px-3 text-right">
-                    Converted leads % (sourced)
-                  </th>
-                  <th className="py-2.5 px-3 text-right">Shared leads</th>
-                  <th className="py-2.5 px-3 text-right">
-                    Refused leads % (shared)
-                  </th>
-                  <th className="py-2.5 px-3 text-right">
-                    Converted leads (shared)
-                  </th>
-                  <th className="py-2.5 px-3 text-right">
-                    Converted leads % (shared)
-                  </th>
-                  <th className="py-2.5 px-3 text-right">Deals</th>
-                  <th className="py-2.5 px-3 text-right">Registered deals</th>
-                  <th className="py-2.5 px-3 text-right">Won deals</th>
-                  <th className="py-2.5 px-3 text-right">Won deals %</th>
-                  <th className="py-2.5 px-3 text-right">Actions</th>
+                  <th className="py-2 px-3">Name</th>
+                  <th className="py-2 px-3 text-right">Partners</th>
+                  <th className="py-2 px-3 text-right">Submitted leads</th>
+                  <th className="py-2 px-3 text-right">Refused leads % (sourced)</th>
+                  <th className="py-2 px-3 text-right">Converted leads (sourced)</th>
+                  <th className="py-2 px-3 text-right">Converted leads % (sourced)</th>
+                  <th className="py-2 px-3 text-right">Shared leads</th>
+                  <th className="py-2 px-3 text-right">Refused leads % (shared)</th>
+                  <th className="py-2 px-3 text-right">Converted leads (shared)</th>
+                  <th className="py-2 px-3 text-right">Converted leads % (shared)</th>
+                  <th className="py-2 px-3 text-right">Deals</th>
+                  <th className="py-2 px-3 text-right">Registered deals</th>
+                  <th className="py-2 px-3 text-right">Won deals</th>
+                  <th className="py-2 px-3 text-right">Won deals %</th>
+                  <th className="py-2 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 whitespace-nowrap">
                 {items.map((g) => {
                   const meta = parseMeta(g.metadataJson);
-                  const livePartnersCount = partners.filter(
-                    (p) => p.groupName === g.name
-                  ).length;
+                  const livePartnersCount = partners.filter((p) => p.groupName === g.name).length;
                   return (
                     <tr key={g.id} className="hover:bg-blue-50/40">
-                      <td className="py-3 px-3 font-bold text-blue-700">
-                        {g.name}
-                      </td>
-                      <td className="py-3 px-3 text-right font-semibold">
-                        {livePartnersCount || meta.partnersCount || 2}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        {meta.submittedLeads ?? 18}
-                      </td>
-                      <td className="py-3 px-3 text-right">4.5%</td>
-                      <td className="py-3 px-3 text-right">11</td>
-                      <td className="py-3 px-3 text-right font-semibold text-blue-700">
-                        {meta.convertedLeadsPct ?? "61%"}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        {meta.sharedLeads ?? 8}
-                      </td>
-                      <td className="py-3 px-3 text-right">0%</td>
-                      <td className="py-3 px-3 text-right">5</td>
-                      <td className="py-3 px-3 text-right">62.5%</td>
-                      <td className="py-3 px-3 text-right">
-                        {meta.registeredDeals ?? 12}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        {meta.registeredDeals ?? 12}
-                      </td>
-                      <td className="py-3 px-3 text-right font-bold text-emerald-700">
-                        {meta.wonDeals ?? 8}
-                      </td>
-                      <td className="py-3 px-3 text-right font-bold text-slate-900">
-                        {meta.wonDealsPct ?? "66.7%"}
-                      </td>
-                      <td className="py-3 px-3 text-right space-x-1.5">
-                        <button
-                          onClick={() => openEditModal(g)}
-                          className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold"
-                        >
-                          Edit &amp; Members
-                        </button>
-                        <button
-                          onClick={() =>
-                            mutate(
-                              "DELETE_MANAGE_ITEM",
-                              { id: g.id },
-                              `Deleted group "${g.name}"`
-                            )
-                          }
-                          className="text-slate-400 hover:text-red-600 px-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 inline" />
-                        </button>
+                      <td className="py-2.5 px-3 font-bold text-blue-700">{g.name}</td>
+                      <td className="py-2.5 px-3 text-right font-semibold">{livePartnersCount || meta.partnersCount || 2}</td>
+                      <td className="py-2.5 px-3 text-right">{meta.submittedLeads ?? 18}</td>
+                      <td className="py-2.5 px-3 text-right">4.5%</td>
+                      <td className="py-2.5 px-3 text-right">11</td>
+                      <td className="py-2.5 px-3 text-right font-semibold text-blue-700">{meta.convertedLeadsPct ?? "61%"}</td>
+                      <td className="py-2.5 px-3 text-right">{meta.sharedLeads ?? 8}</td>
+                      <td className="py-2.5 px-3 text-right">0%</td>
+                      <td className="py-2.5 px-3 text-right">5</td>
+                      <td className="py-2.5 px-3 text-right">62.5%</td>
+                      <td className="py-2.5 px-3 text-right">{meta.registeredDeals ?? 12}</td>
+                      <td className="py-2.5 px-3 text-right">{meta.registeredDeals ?? 12}</td>
+                      <td className="py-2.5 px-3 text-right font-bold text-emerald-700">{meta.wonDeals ?? 8}</td>
+                      <td className="py-2.5 px-3 text-right font-bold text-slate-900">{meta.wonDealsPct ?? "66.7%"}</td>
+                      <td className="py-2.5 px-3 text-right space-x-1.5">
+                        <button onClick={() => openEditModal(g)} className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold">Edit &amp; Members</button>
+                        <button onClick={() => mutate("DELETE_MANAGE_ITEM", { id: g.id }, `Deleted group "${g.name}"`)} className="text-slate-400 hover:text-red-600 px-1"><Trash2 className="w-3.5 h-3.5 inline" /></button>
                       </td>
                     </tr>
                   );
@@ -1163,22 +1082,12 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 6. HELP CENTER SUB-MODULE (Articles & Collections sub-tabs + Attachments + Edit) */}
+        {/* 6. HELP CENTER SUB-MODULE */}
         {selectedTool === "help_articles" && (
           <div className="space-y-4 text-xs">
             <div className="flex items-center space-x-2 border-b border-slate-200 pb-2">
               {(["Articles", "Collections"] as const).map((st) => (
-                <button
-                  key={st}
-                  onClick={() => setHelpSubTab(st)}
-                  className={`px-3.5 py-1.5 rounded-lg font-semibold ${
-                    helpSubTab === st
-                      ? "bg-blue-600 text-white"
-                      : "bg-slate-100 text-slate-700"
-                  }`}
-                >
-                  {st}
-                </button>
+                <button key={st} onClick={() => setHelpSubTab(st)} className={`px-3.5 py-1.5 rounded-lg font-semibold ${helpSubTab === st ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700"}`}>{st}</button>
               ))}
             </div>
 
@@ -1186,55 +1095,18 @@ export default function ManageHubPage() {
               <div className="divide-y divide-slate-100">
                 {items.map((art) => {
                   const meta = parseMeta(art.metadataJson);
-                  const fileUrl =
-                    meta.fileUrl ||
-                    "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
+                  const fileUrl = normalizeFileUrl(meta.fileUrl, art.name);
                   return (
-                    <div
-                      key={art.id}
-                      className="py-3.5 flex items-center justify-between gap-4"
-                    >
+                    <div key={art.id} className="py-3.5 flex items-center justify-between gap-4">
                       <div className="space-y-1">
-                        <p className="font-bold text-sm text-slate-900">
-                          {art.name}
-                        </p>
+                        <p className="font-bold text-sm text-slate-900">{art.name}</p>
                         <p className="text-slate-500">{art.subtitle}</p>
-                        {meta.articleBody && (
-                          <p className="text-slate-600 bg-slate-50 p-2 rounded border border-slate-200 max-w-2xl">
-                            {meta.articleBody}
-                          </p>
-                        )}
+                        {meta.articleBody && <p className="text-slate-600 bg-slate-50 p-2 rounded border border-slate-200 max-w-2xl">{meta.articleBody}</p>}
                       </div>
                       <div className="flex items-center space-x-2 shrink-0">
-                        <a
-                          href={fileUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          download
-                          className="px-2.5 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold flex items-center space-x-1"
-                        >
-                          <Download className="w-3 h-3" />
-                          <span>PDF Guide</span>
-                        </a>
-                        <button
-                          onClick={() => openEditModal(art)}
-                          className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold flex items-center space-x-1"
-                        >
-                          <Edit3 className="w-3 h-3" />
-                          <span>Edit</span>
-                        </button>
-                        <button
-                          onClick={() =>
-                            mutate(
-                              "DELETE_MANAGE_ITEM",
-                              { id: art.id },
-                              `Deleted article "${art.name}"`
-                            )
-                          }
-                          className="text-slate-400 hover:text-red-600"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <a href={fileUrl} target="_blank" rel="noreferrer" download className="px-2.5 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold flex items-center space-x-1"><Download className="w-3 h-3" /><span>PDF Guide</span></a>
+                        <button onClick={() => openEditModal(art)} className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold flex items-center space-x-1"><Edit3 className="w-3 h-3" /><span>Edit</span></button>
+                        <button onClick={() => mutate("DELETE_MANAGE_ITEM", { id: art.id }, `Deleted article "${art.name}"`)} className="text-slate-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
                     </div>
                   );
@@ -1242,20 +1114,10 @@ export default function ManageHubPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {[
-                  "Getting Started for Partners",
-                  "Deal Registration & Protection",
-                  "Commissions, Payouts & Billing",
-                  "Account Mapping & Co-Selling",
-                ].map((colName) => (
-                  <div
-                    key={colName}
-                    className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-1"
-                  >
+                {["Getting Started for Partners", "Deal Registration & Protection", "Commissions, Payouts & Billing", "Account Mapping & Co-Selling"].map((colName) => (
+                  <div key={colName} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-1">
                     <p className="font-bold text-slate-900">{colName}</p>
-                    <p className="text-slate-500">
-                      Visible to All Active Partner Programs
-                    </p>
+                    <p className="text-slate-500">Visible to All Active Partner Programs</p>
                   </div>
                 ))}
               </div>
@@ -1263,7 +1125,7 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 7. INTEGRATIONS SUB-MODULE (14 Cards + API Key/Webhook Config Modal) */}
+        {/* 7. INTEGRATIONS SUB-MODULE */}
         {selectedTool === "integrations" && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
             {items.map((intItem) => {
@@ -1323,7 +1185,7 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 8-14. REMAINING SUB-MODULES (News, Partner Dashboards, Directories, Onboarding, Products, Team, Workflows) WITH FULL EDIT + ATTACHMENTS + ACTIONS */}
+        {/* 8-14. REMAINING SUB-MODULES */}
         {![
           "assets",
           "certifications",
@@ -1347,14 +1209,16 @@ export default function ManageHubPage() {
                         {item.name}
                       </p>
                       <StatusBadge status={item.status} />
+                      {selectedTool === "workflows" && meta.runs !== undefined && (
+                        <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold text-[10px]">
+                          Runs: {meta.runs}
+                        </span>
+                      )}
                     </div>
                     <p className="text-slate-600">{item.subtitle}</p>
                     {meta.fileName && (
                       <a
-                        href={
-                          meta.fileUrl ||
-                          "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf"
-                        }
+                        href={normalizeFileUrl(meta.fileUrl, item.name)}
                         target="_blank"
                         rel="noreferrer"
                         download={meta.fileName}
@@ -1369,11 +1233,7 @@ export default function ManageHubPage() {
                   <div className="flex items-center space-x-2">
                     {selectedTool === "workflows" && (
                       <button
-                        onClick={() =>
-                          showToast(
-                            `Executed workflow "${item.name}" — 1 matching record processed!`
-                          )
-                        }
+                        onClick={() => handleRunWorkflowNow(item.id, item.name)}
                         className="px-2.5 py-1 rounded border border-blue-600 text-blue-700 hover:bg-blue-50 font-semibold flex items-center space-x-1"
                       >
                         <Play className="w-3 h-3" />
@@ -1426,668 +1286,34 @@ export default function ManageHubPage() {
         )}
       </div>
 
-      {/* UNIVERSAL MODULE-SPECIFIC CREATE / EDIT MODAL WITH REAL FILE ATTACHMENT UPLOAD */}
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
-          <form
-            onSubmit={handleSaveItem}
-            className="bg-white rounded-xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden text-xs"
-          >
-            <div className="px-5 py-4 bg-blue-600 text-white flex items-center justify-between">
-              <h3 className="font-bold text-sm">
-                {editingId
-                  ? `Edit ${activeMod.title} Record`
-                  : activeMod.cta}
-              </h3>
-              <button
-                type="button"
-                onClick={() => {
-                  setModalOpen(false);
-                  setEditingId(null);
-                }}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-3.5 max-h-[78vh] overflow-y-auto">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="md:col-span-2">
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Name / Title *
-                  </label>
-                  <input
-                    required
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Status
-                  </label>
-                  <select
-                    value={form.status}
-                    onChange={(e) =>
-                      setForm({ ...form, status: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  >
-                    <option>Active</option>
-                    <option>Published</option>
-                    <option>Draft</option>
-                    <option>Connected</option>
-                    <option>Paused</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* ASSETS FIELDS */}
-              {selectedTool === "assets" && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Asset Folder
-                    </label>
-                    <select
-                      value={form.folder}
-                      onChange={(e) =>
-                        setForm({ ...form, folder: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    >
-                      <option>Sales Collateral</option>
-                      <option>Contracts</option>
-                      <option>Technical Enablement</option>
-                      <option>Brand Guidelines</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Visible to Partner Program
-                    </label>
-                    <select
-                      value={form.programVisibility}
-                      onChange={(e) =>
-                        setForm({ ...form, programVisibility: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    >
-                      <option>All Programs</option>
-                      {programs.map((p) => (
-                        <option key={p.id} value={p.name}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-
-              {/* CERTIFICATIONS FIELDS */}
-              {selectedTool === "certifications" && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Validity Period (Months)
-                    </label>
-                    <input
-                      type="number"
-                      value={form.validityMonths}
-                      onChange={(e) =>
-                        setForm({ ...form, validityMonths: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Minimum Passing Score
-                    </label>
-                    <input
-                      value={form.passingScore}
-                      onChange={(e) =>
-                        setForm({ ...form, passingScore: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* EMAIL TEMPLATES FIELDS */}
-              {selectedTool === "email_templates" && (
-                <>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">
-                        Email Subject Line *
-                      </label>
-                      <input
-                        value={form.emailSubject}
-                        onChange={(e) =>
-                          setForm({ ...form, emailSubject: e.target.value })
-                        }
-                        className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">
-                        Lifecycle Trigger
-                      </label>
-                      <input
-                        value={form.emailTrigger}
-                        onChange={(e) =>
-                          setForm({ ...form, emailTrigger: e.target.value })
-                        }
-                        className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Email Body (Supports merge tags:{" "}
-                      <code>{"{{partner.name}}"}</code>,{" "}
-                      <code>{"{{contact.first_name}}"}</code>,{" "}
-                      <code>{"{{deal.name}}"}</code>)
-                    </label>
-                    <textarea
-                      rows={5}
-                      value={form.emailBody}
-                      onChange={(e) =>
-                        setForm({ ...form, emailBody: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono"
-                    />
-                  </div>
-                </>
-              )}
-
-              {/* GROUPS MEMBER ASSIGNMENT */}
-              {selectedTool === "groups" && (
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Assign Partners to this Group:
-                  </label>
-                  <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-lg p-2.5 space-y-1.5 bg-slate-50">
-                    {partners.map((p) => {
-                      const checked = form.groupPartnerIds.includes(p.id);
-                      return (
-                        <label
-                          key={p.id}
-                          className="flex items-center space-x-2 cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) => {
-                              const next = e.target.checked
-                                ? [...form.groupPartnerIds, p.id]
-                                : form.groupPartnerIds.filter(
-                                    (id) => id !== p.id
-                                  );
-                              setForm({ ...form, groupPartnerIds: next });
-                            }}
-                          />
-                          <span className="font-medium text-slate-800">
-                            {p.name}
-                          </span>
-                          <span className="text-slate-400">
-                            (Current: {p.groupName})
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* HELP CENTER FIELDS */}
-              {selectedTool === "help_articles" && (
-                <>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Help Center Collection
-                    </label>
-                    <select
-                      value={form.collection}
-                      onChange={(e) =>
-                        setForm({ ...form, collection: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Article Body Content
-                    </label>
-                    <textarea
-                      rows={4}
-                      value={form.articleBody}
-                      onChange={(e) =>
-                        setForm({ ...form, articleBody: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                </>
-              )}
-
-              {/* INTEGRATIONS CONFIG FIELDS */}
-              {selectedTool === "integrations" && (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      API Key / OAuth Client Token
-                    </label>
-                    <input
-                      value={form.apiKey}
-                      onChange={(e) =>
-                        setForm({ ...form, apiKey: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Webhook Endpoint URL
-                    </label>
-                    <input
-                      value={form.webhookUrl}
-                      onChange={(e) =>
-                        setForm({ ...form, webhookUrl: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* PRODUCTS FIELDS */}
-              {selectedTool === "products" && (
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Product SKU
-                    </label>
-                    <input
-                      value={form.sku}
-                      onChange={(e) =>
-                        setForm({ ...form, sku: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Unit Price (SGD)
-                    </label>
-                    <input
-                      type="number"
-                      value={form.priceSgd}
-                      onChange={(e) =>
-                        setForm({ ...form, priceSgd: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Billing Cadence
-                    </label>
-                    <select
-                      value={form.billingCadence}
-                      onChange={(e) =>
-                        setForm({ ...form, billingCadence: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    >
-                      <option>Annual License</option>
-                      <option>Monthly Subscription</option>
-                      <option>One-Time Implementation</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-
-              {/* TEAM (COWORKERS) FIELDS */}
-              {selectedTool === "team" && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Email *
-                    </label>
-                    <input
-                      required
-                      type="email"
-                      value={form.coworkerEmail}
-                      onChange={(e) =>
-                        setForm({ ...form, coworkerEmail: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Job Title
-                    </label>
-                    <input
-                      value={form.coworkerTitle}
-                      onChange={(e) =>
-                        setForm({ ...form, coworkerTitle: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Phone Number
-                    </label>
-                    <input
-                      value={form.coworkerPhone}
-                      onChange={(e) =>
-                        setForm({ ...form, coworkerPhone: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Role
-                    </label>
-                    <select
-                      value={form.coworkerRole}
-                      onChange={(e) =>
-                        setForm({ ...form, coworkerRole: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    >
-                      <option>Administrator</option>
-                      <option>Manager</option>
-                      <option>Read-Only</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-
-              {/* WORKFLOWS FIELDS */}
-              {selectedTool === "workflows" && (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      WHEN Trigger Event
-                    </label>
-                    <select
-                      value={form.workflowTrigger}
-                      onChange={(e) =>
-                        setForm({ ...form, workflowTrigger: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    >
-                      <option>Deal Stage moves to Closed Won</option>
-                      <option>New Partner Application Submitted</option>
-                      <option>New Deal Registered by Partner</option>
-                      <option>Shared Lead Pending &gt; 72 Hours</option>
-                      <option>Partner Sourced Revenue &gt;= SGD 50,000</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      IF Condition
-                    </label>
-                    <input
-                      value={form.workflowCondition}
-                      onChange={(e) =>
-                        setForm({ ...form, workflowCondition: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      THEN Automated Action
-                    </label>
-                    <input
-                      value={form.workflowAction}
-                      onChange={(e) =>
-                        setForm({ ...form, workflowAction: e.target.value })
-                      }
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* ONBOARDING PIPELINE STAGES */}
-              {selectedTool === "onboarding_pipelines" && (
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Onboarding Stages (Comma-separated Kanban columns)
-                  </label>
-                  <input
-                    value={form.pipelineStages}
-                    onChange={(e) =>
-                      setForm({ ...form, pipelineStages: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-              )}
-
-              {/* REAL FILE ATTACHMENT UPLOAD (Available on Assets, Certifications, Help Articles, News, Products, Onboarding) */}
-              {[
-                "assets",
-                "certifications",
-                "help_articles",
-                "news",
-                "products",
-                "onboarding_pipelines",
-              ].includes(selectedTool) && (
-                <div className="p-3.5 rounded-xl border-2 border-dashed border-blue-300 bg-blue-50/40 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-blue-800 flex items-center space-x-1.5">
-                      <Upload className="w-4 h-4" />
-                      <span>
-                        Attach File (PDF, DOCX, Image, Video, Deck)
-                      </span>
-                    </span>
-                    {uploading && (
-                      <span className="text-blue-600 font-semibold">
-                        Uploading...
-                      </span>
-                    )}
-                  </div>
-                  <input
-                    type="file"
-                    onChange={handleFileChange}
-                    className="block w-full text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
-                  />
-                  {form.fileName && (
-                    <div className="flex items-center justify-between bg-white px-3 py-1.5 rounded-lg border border-blue-200">
-                      <span className="font-semibold text-slate-800 truncate">
-                        Attached: {form.fileName} ({form.fileSize || "Ready"})
-                      </span>
-                      <a
-                        href={form.fileUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-600 hover:underline font-semibold flex items-center space-x-1"
-                      >
-                        <span>Preview</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Summary / Notes
-                </label>
-                <textarea
-                  rows={2}
-                  value={form.subtitle}
-                  onChange={(e) =>
-                    setForm({ ...form, subtitle: e.target.value })
-                  }
-                  placeholder="Optional custom subtitle or notes..."
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-
-            <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setModalOpen(false);
-                  setEditingId(null);
-                }}
-                className="px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-200"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center space-x-1"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>{editingId ? "Save Changes" : "Create"}</span>
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* AWARD CERTIFICATION TO PARTNER MODAL */}
-      {awardModalCertId && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
-          <form
-            onSubmit={handleAwardCertification}
-            className="bg-white rounded-xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden text-xs"
-          >
-            <div className="px-5 py-4 bg-blue-600 text-white flex items-center justify-between">
-              <h3 className="font-bold text-sm">
-                Award Certification to Partner
-              </h3>
-              <button
-                type="button"
-                onClick={() => setAwardModalCertId(null)}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-3">
-              <label className="block font-semibold text-slate-700">
-                Select Partner Organization
-              </label>
-              <select
-                value={selectedPartnerToAward}
-                onChange={(e) => setSelectedPartnerToAward(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-              >
-                {partners.map((p) => (
-                  <option key={p.id} value={p.name}>
-                    {p.name} ({p.qualifyingLevel})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
-              <button
-                type="button"
-                onClick={() => setAwardModalCertId(null)}
-                className="px-3 py-1.5 rounded-lg text-slate-600"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-blue-600 text-white font-semibold"
-              >
-                Issue Certificate
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* NOTIFY PARTNERS ABOUT ASSET CHANGES MODAL */}
-      {notifyModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              await mutate(
-                "SEND_EMAIL",
-                {
-                  to: notifyTargetEmail,
-                  subject: "New Enablement Assets Available in R-PRM Partner Portal",
-                  body: notifyMessage,
-                  templateName: "Asset Update Notification",
-                  portalLink: "/portal",
-                },
-                `Asset update email sent to ${notifyTargetEmail}!`
-              );
-              setNotifyModalOpen(false);
-            }}
-            className="bg-white rounded-xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden text-xs"
-          >
-            <div className="px-5 py-4 bg-blue-600 text-white flex items-center justify-between">
-              <h3 className="font-bold text-sm">
-                Notify partners about asset changes
-              </h3>
-              <button
-                type="button"
-                onClick={() => setNotifyModalOpen(false)}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-3">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Recipient Partner Email
-                </label>
-                <input
-                  required
-                  value={notifyTargetEmail}
-                  onChange={(e) => setNotifyTargetEmail(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Notification Message
-                </label>
-                <textarea
-                  rows={3}
-                  value={notifyMessage}
-                  onChange={(e) => setNotifyMessage(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-            <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
-              <button
-                type="button"
-                onClick={() => setNotifyModalOpen(false)}
-                className="px-3 py-1.5 rounded-lg text-slate-600"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-blue-600 text-white font-semibold"
-              >
-                Send Notification
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      <ManageModals
+        modalOpen={modalOpen}
+        setModalOpen={setModalOpen}
+        editingId={editingId}
+        setEditingId={setEditingId}
+        selectedTool={selectedTool}
+        activeModTitle={activeMod.title}
+        activeModCta={activeMod.cta}
+        form={form}
+        setForm={setForm}
+        handleSaveItem={handleSaveItem}
+        handleFileChange={handleFileChange}
+        uploading={uploading}
+        programs={programs}
+        partners={partners}
+        awardModalCertId={awardModalCertId}
+        setAwardModalCertId={setAwardModalCertId}
+        selectedPartnerToAward={selectedPartnerToAward}
+        setSelectedPartnerToAward={setSelectedPartnerToAward}
+        handleAwardCertification={handleAwardCertification}
+        notifyModalOpen={notifyModalOpen}
+        setNotifyModalOpen={setNotifyModalOpen}
+        notifyTargetEmail={notifyTargetEmail}
+        setNotifyTargetEmail={setNotifyTargetEmail}
+        notifyMessage={notifyMessage}
+        setNotifyMessage={setNotifyMessage}
+        mutate={mutate}
+      />
     </div>
   );
 }

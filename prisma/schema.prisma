@@ -188,6 +188,8 @@ model Reward {
   fromRewardRule String   @default("15% Recurring Commission")
   status         String   @default("Pending") // Pending, Accepted, Paid, Refused
   payoutNumber   String   @default("")
+  payoutId       String?
+  payout         Payout?  @relation(fields: [payoutId], references: [id])
   comment        String   @default("")
   createdAt      DateTime @default(now())
 }
@@ -207,6 +209,7 @@ model Payout {
   invoiceRef   String   @default("INV-2026-089")
   paidDate     String   @default("")
   createdAt    DateTime @default(now())
+  rewards      Reward[]
 }
 
 model Task {
@@ -333,4 +336,47 @@ model AuditLog {
   diffJson   String   @default("{}")
   createdAt  DateTime @default(now())
 }
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  name                String
+  identityType        String    // "coworker" | "partner"
+  role                String    // "Administrator" | "Manager" | "SalesRep" | "Stakeholder"
+  partnerId           String?
+  partnerName         String?
+  isMainContact       Boolean   @default(false)
+  passwordHash        String    // format: "scrypt:<randomSaltHex>:<derivedKeyHex>"
+  mfaSecret           String?
+  recoveryCodesJson   String    @default("[]")
+  status              String    @default("Active") // Active, Pending, Disabled
+  isTestAccount       Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  sessions            Session[]
+}
+
+model Session {
+  id                     String    @id
+  userId                 String
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  impersonatingPartnerId String?
+  createdAt              DateTime  @default(now())
+  expiresAt              DateTime
+  revokedAt              DateTime?
+}
+
+model ActivationToken {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique
+  email       String
+  name        String
+  partnerId   String?
+  partnerName String?
+  role        String    @default("Manager")
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+}
+
 

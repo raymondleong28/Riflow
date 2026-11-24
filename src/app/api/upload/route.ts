@@ -1,10 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { getActiveServerSession } from "@/lib/authSession";
+import { storeFileViaConnector } from "@/lib/connectors";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * §16.2 S4 & §16.3 G3: Secure Upload Endpoint
+ * - Requires an active server-side session (`401` if logged out).
+ * - Enforces file size limit (`15 MB`) and extension allowlist (`PDF`, images, Office docs, CSV, TXT; refuses `.html`, `.js`, etc.).
+ * - Routes all writes through `storeFileViaConnector` into private storage (`storage/uploads/`, never `public/`).
+ */
 export async function POST(req: NextRequest) {
+  const session = await getActiveServerSession(req);
+  if (!session) {
+    return NextResponse.json(
+      { error: "Authentication required to upload files" },
+      { status: 401 }
+    );
+  }
+
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
@@ -15,30 +30,40 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    const uploadDir = path.join(process.cwd(), "public", "uploads");
-    await mkdir(uploadDir, { recursive: true });
+    let stored;
+    try {
+      stored = await storeFileViaConnector({
+        originalName: file.name,
+        buffer,
+        mimeType: file.type,
+      });
+    } catch (validationErr) {
+      return NextResponse.json(
+        { error: String(validationErr) },
+        { status: 400 }
+      );
+    }
 
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const uniqueName = `${Date.now()}_${safeName}`;
-    const filePath = path.join(uploadDir, uniqueName);
-
-    await writeFile(filePath, buffer);
-
-    const sizeKb = Math.max(1, Math.round(file.size / 1024));
-    const sizeLabel =
-      sizeKb >= 1024
-        ? `${(sizeKb / 1024).toFixed(2)} MB`
-        : `${sizeKb} KB`;
+    await prisma.auditLog.create({
+      data: {
+        actor: session.email,
+        actorRole: `${session.identityType} (${session.role})`,
+        action: "UPLOAD",
+        objectType: "StorageFile",
+        objectId: stored.storageKey,
+        summary: `Uploaded file "${file.name}" (${stored.fileSizeLabel}) via storage connector`,
+      },
+    });
 
     return NextResponse.json({
       ok: true,
       fileName: file.name,
-      fileUrl: `/uploads/${uniqueName}`,
-      fileSize: sizeLabel,
+      storageKey: stored.storageKey,
+      fileUrl: stored.downloadUrl,
+      fileSize: stored.fileSizeLabel,
       mimeType: file.type || "application/octet-stream",
     });
   } catch (error) {
-    console.error("POST /api/upload error:", error);
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }

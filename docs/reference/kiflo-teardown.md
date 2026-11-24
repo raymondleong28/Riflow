@@ -1,6 +1,6 @@
-# Kiflo Teardown Reference Specification
+# Kiflo Teardown Reference Specification (STUB — not the source of truth)
 
-> Consolidated behavioural specification from the live Kiflo PRM (`app.kiflo.com`) crawl and audit report (`AGENTS.md`).
+> **STUB — not the source of truth (§16.3 G12):** Ray will supply the full Notion export of "Kiflo research by Claude" (id `37c9fed2563b80c09501f8fb0150b7ec`, Phases 1–11). Do not expand this file from memory. Until the Notion export replaces this file, `AGENTS.md` is the primary specification.
 
 ## 1. Reward & Commission Engine (§4.1)
 - **Triggers:**

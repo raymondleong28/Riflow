@@ -3,11 +3,30 @@ import {
   normalizeRewardRule,
   generateRewardsFromPartnerLevel,
 } from "../src/lib/prmEngine";
+import { encryptBankDetails } from "../src/lib/connectors";
+import { hashPasswordWithRandomSalt } from "../src/lib/authSession";
 
 const prisma = new PrismaClient();
 
 export async function seedDatabase() {
+  // §16.3 G10: Seed refuses to run when NODE_ENV=production!
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "FAIL_CLOSED: Seed script refuses to run when NODE_ENV=production (§16.3 G10)"
+    );
+  }
+  const adminPassword = (process.env.SEED_ADMIN_PASSWORD || "").trim();
+  const partnerPassword = (process.env.SEED_PARTNER_PASSWORD || "").trim();
+  if (!adminPassword || !partnerPassword) {
+    throw new Error(
+      "FAIL_CLOSED: SEED_ADMIN_PASSWORD and SEED_PARTNER_PASSWORD must be provided in .env (§16.2 S5)"
+    );
+  }
+
   // Clear existing data in safe order
+  await prisma.session.deleteMany();
+  await prisma.activationToken.deleteMany();
+  await prisma.user.deleteMany();
   await prisma.noteItem.deleteMany();
   await prisma.manageItem.deleteMany();
   await prisma.trackingLink.deleteMany();
@@ -444,13 +463,15 @@ export async function seedDatabase() {
     await prisma.partner.create({
       data: {
         ...p,
-        bankDetailsJson: JSON.stringify({
-          bankName: "DBS Corporate Bank Singapore",
-          swiftCode: "DBSSSGSG",
-          accountNumber: "003-948271-8",
-          beneficiaryName: p.name,
-          taxId: "SG-202699182K",
-        }),
+        bankDetailsJson: encryptBankDetails(
+          JSON.stringify({
+            bankName: "DBS Corporate Bank Singapore",
+            swiftCode: "DBSSSGSG",
+            accountNumber: "003-948271-8",
+            beneficiaryName: p.name,
+            taxId: "SG-202699182K",
+          })
+        ),
       },
     });
   }
@@ -893,7 +914,43 @@ export async function seedDatabase() {
     ],
   });
 
-  // Generate rewards directly from each Partner's actual Program Level rules (§13.1 & §14.1)
+  // Generate rewards directly from each Partner's actual Program Level rules (§13.1, §14.1, §16.4 P1)
+  // Create Payouts first, then link Rewards via real `payoutId` foreign key and compute Payout amounts from linked rewards!
+  await prisma.payout.createMany({
+    data: [
+      {
+        id: "pay-1",
+        payoutNumber: "PO-2026-04",
+        name: "November 2026 Partner Settlement — Synthetix",
+        partnerName: "Synthetix POS & Retail Tech",
+        amount: 3780,
+        currency: "SGD",
+        amountSgd: 3780,
+        periodFrom: "2026-08-01",
+        periodTo: "2026-11-15",
+        rewardsCount: 2,
+        status: "Ready",
+        invoiceRef: "INV-SYN-884",
+        paidDate: "",
+      },
+      {
+        id: "pay-2",
+        payoutNumber: "PO-2026-03",
+        name: "Q3 Partner Settlement — Stratos FinTech",
+        partnerName: "Stratos FinTech Integrations",
+        amount: 972,
+        currency: "SGD",
+        amountSgd: 972,
+        periodFrom: "2026-06-01",
+        periodTo: "2026-09-30",
+        rewardsCount: 1,
+        status: "Paid",
+        invoiceRef: "INV-STR-309",
+        paidDate: "2026-10-05",
+      },
+    ],
+  });
+
   const [seededPrograms, seededPartners, seededTransactions] = await Promise.all([
     prisma.program.findMany(),
     prisma.partner.findMany(),
@@ -936,10 +993,84 @@ export async function seedDatabase() {
             : isBatchReadyTx
             ? "PO-2026-04"
             : "",
+          payoutId: isPaidTx ? "pay-2" : isBatchReadyTx ? "pay-1" : null,
           comment: g.comment,
         },
       });
     }
+  }
+
+  // §16.2 S5, S6, S7 & §16.3 G10: Seed `User` rows with per-user random salt scrypt hashes from .env
+  const coworkerUsers = [
+    {
+      email: "alex@r-prm.example.com",
+      name: "Alex Morgan",
+      role: "Administrator",
+    },
+    {
+      email: "sarah@r-prm.example.com",
+      name: "Sarah Jenkins",
+      role: "Manager",
+    },
+    {
+      email: "marcus@r-prm.example.com",
+      name: "Marcus Vance",
+      role: "Manager",
+    },
+  ];
+  for (const cw of coworkerUsers) {
+    await prisma.user.create({
+      data: {
+        email: cw.email,
+        name: cw.name,
+        identityType: "coworker",
+        role: cw.role,
+        passwordHash: hashPasswordWithRandomSalt(adminPassword),
+        status: "Active",
+        isTestAccount: true,
+      },
+    });
+  }
+
+  // Partner Users (Main Contacts + PartnerTeamMembers)
+  for (const p of seededPartners) {
+    await prisma.user.upsert({
+      where: { email: p.contactEmail.toLowerCase() },
+      update: {},
+      create: {
+        email: p.contactEmail.toLowerCase(),
+        name: `${p.contactFirstName} ${p.contactLastName}`,
+        identityType: "partner",
+        role: "Manager",
+        partnerId: p.id,
+        partnerName: p.name,
+        isMainContact: true,
+        passwordHash: hashPasswordWithRandomSalt(partnerPassword),
+        status: p.portalAccess ? "Active" : "Pending",
+        isTestAccount: true,
+      },
+    });
+  }
+
+  const allTeamMembers = await prisma.partnerTeamMember.findMany();
+  for (const tm of allTeamMembers) {
+    const linkedPartner = seededPartners.find((p) => p.name === tm.partnerName);
+    await prisma.user.upsert({
+      where: { email: tm.email.toLowerCase() },
+      update: {},
+      create: {
+        email: tm.email.toLowerCase(),
+        name: tm.name,
+        identityType: "partner",
+        role: tm.role === "Sales Rep" ? "SalesRep" : tm.role,
+        partnerId: linkedPartner?.id || "prt-1",
+        partnerName: tm.partnerName,
+        isMainContact: false,
+        passwordHash: hashPasswordWithRandomSalt(partnerPassword),
+        status: "Active",
+        isTestAccount: true,
+      },
+    });
   }
 
   // Initial AuditLog entries including DELETE of accidental preset reward (§14.2 Slice 1)
@@ -986,15 +1117,6 @@ export async function seedDatabase() {
           rewardsSgd: [3150, 630],
         }),
       },
-    ],
-  });
-
-  // Payouts
-  await prisma.payout.createMany({
-    data: [
-      { id: "pay-1", payoutNumber: "PO-2026-04", name: "November 2026 Partner Settlement — Synthetix", partnerName: "Synthetix POS & Retail Tech", amount: 7560, currency: "MYR", amountSgd: 2268, periodFrom: "2026-08-01", periodTo: "2026-11-15", rewardsCount: 1, status: "Ready", invoiceRef: "INV-SYN-884", paidDate: "" },
-      { id: "pay-2", payoutNumber: "PO-2026-03", name: "Q3 Partner Settlement — Stratos FinTech", partnerName: "Stratos FinTech Integrations", amount: 972, currency: "SGD", amountSgd: 972, periodFrom: "2026-06-01", periodTo: "2026-09-30", rewardsCount: 1, status: "Paid", invoiceRef: "INV-STR-309", paidDate: "2026-10-05" },
-      { id: "pay-3", payoutNumber: "PO-2026-02", name: "H1 Strategic Partner Settlement — Apex Cloud", partnerName: "Apex Cloud Solutions Pte Ltd", amount: 6400, currency: "SGD", amountSgd: 6400, periodFrom: "2026-01-01", periodTo: "2026-06-30", rewardsCount: 4, status: "Paid", invoiceRef: "INV-APX-114", paidDate: "2026-07-12" },
     ],
   });
 

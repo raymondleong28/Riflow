@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { prisma } from "../src/lib/prisma";
+import {
+  loadRequiredConfig,
+  getAppBaseUrl,
+} from "../src/lib/config";
 import {
   serializeManageItemForPartner,
   serializeSettingsForPartner,
@@ -25,7 +30,26 @@ import {
   verifyTotpOrRecoveryCode,
   encryptBankDetails,
   decryptBankDetails,
+  renderEscapedEmailHtml,
+  sendEmailViaConnector,
+  storeFileViaConnector,
 } from "../src/lib/connectors";
+import {
+  hashPasswordWithRandomSalt,
+  verifyPasswordWithStoredSalt,
+  createServerSessionRow,
+  getActiveServerSession,
+  revokeServerSessionById,
+  issuePartnerActivationLink,
+  redeemActivationTokenAndSetPassword,
+  checkRateLimitKey,
+  recordAuthFailure,
+  resetRateLimitKey,
+} from "../src/lib/authSession";
+import {
+  matchAccountListsByDomainAndName,
+  handleCsvImportMutation,
+} from "../src/lib/importAndEmailHelpers";
 
 async function runFixtures() {
   console.log("Running R-PRM Known-Answer Parity Fixtures (§3 Slice 0d & §4.1.4)...");
@@ -889,7 +913,305 @@ async function runFixtures() {
     "✓ Fixture 21 passed (§15.2 Slice 2 & Slice 3): Partner allowlist serializers strip metadataJson, awardedPartners, other partner names, and coworker-only settings"
   );
 
-  console.log("\nALL 21 KNOWN-ANSWER PARITY, §13, §14 & §15 POSTGRES CONTRACT FIXTURES PASSED GREEN!");
+  // Fixture 22 (§16.2 S1): Missing or short SESSION_SECRET or BANK_ENCRYPTION_KEY throws FAIL_CLOSED
+  assert.throws(
+    () =>
+      loadRequiredConfig({
+        SESSION_SECRET: "too-short",
+        BANK_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef",
+      }),
+    /FAIL_CLOSED/,
+    "Short SESSION_SECRET must fail closed"
+  );
+  assert.throws(
+    () =>
+      loadRequiredConfig({
+        SESSION_SECRET: "0123456789abcdef0123456789abcdef0123456789abcdef",
+        BANK_ENCRYPTION_KEY: "",
+      }),
+    /FAIL_CLOSED/,
+    "Empty BANK_ENCRYPTION_KEY must fail closed"
+  );
+  console.log(
+    "✓ Fixture 22 passed (§16.2 S1): Missing or <32-byte SESSION_SECRET / BANK_ENCRYPTION_KEY fails closed"
+  );
+
+  // Fixture 23 (§16.2 S2 & S3): Server-side Session table creation, cookie verification, expiry check, and revocation on logout
+  const alexUser = await prisma.user.findUnique({
+    where: { email: "alex@r-prm.example.com" },
+  });
+  assert.ok(alexUser, "User alex@r-prm.example.com must exist in User table");
+  const createdSess = await createServerSessionRow({
+    userId: alexUser.id,
+    identityType: "coworker",
+    ttlMs: 3600 * 1000,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mockReqWithCookie: any = {
+    cookies: {
+      get: (name: string) =>
+        name === "rprm_session" ? { value: createdSess.cookieValue } : undefined,
+    },
+  };
+  const activeSess = await getActiveServerSession(mockReqWithCookie);
+  assert.equal(activeSess?.userId, alexUser.id, "Valid signed session cookie must resolve User");
+  await revokeServerSessionById(createdSess.sessionRowId);
+  const afterRevoke = await getActiveServerSession(mockReqWithCookie);
+  assert.equal(afterRevoke, null, "Revoked session must be rejected immediately");
+  console.log(
+    "✓ Fixture 23 passed (§16.2 S2/S3): Server-side Session row creation, lookup, and immediate revocation verified"
+  );
+
+  // Fixture 24 (§16.2 S4 & §16.3 G3): Upload rejects .html and stores allowed files in storage/uploads/ outside public/
+  await assert.rejects(
+    async () =>
+      storeFileViaConnector({
+        originalName: "xss-payload.html",
+        buffer: Buffer.from("<script>alert(1)</script>"),
+        mimeType: "text/html",
+      }),
+    /not permitted/i,
+    "Uploading .html must be refused"
+  );
+  const validUpload = await storeFileViaConnector({
+    originalName: "partner-guide-check.txt",
+    buffer: Buffer.from("R-PRM Private Upload Verification"),
+    mimeType: "text/plain",
+  });
+  assert.ok(
+    validUpload.downloadUrl.startsWith("/api/files/"),
+    `Expected private download URL /api/files/..., got ${validUpload.downloadUrl}`
+  );
+  assert.equal(
+    fs.existsSync(path.join(process.cwd(), "public", "uploads", validUpload.storageKey)),
+    false,
+    "Uploaded file must NOT exist inside public/uploads/"
+  );
+  assert.equal(
+    fs.existsSync(path.join(process.cwd(), "storage", "uploads", validUpload.storageKey)),
+    true,
+    "Uploaded file MUST exist inside private storage/uploads/"
+  );
+  fs.unlinkSync(path.join(process.cwd(), "storage", "uploads", validUpload.storageKey));
+  console.log(
+    "✓ Fixture 24 passed (§16.2 S4 / §16.3 G3): Upload rejects .html and stores allowed files in private storage/uploads/"
+  );
+
+  // Fixture 25 (§16.2 S5, S6, S7): Per-user random salt password hashing & exact email lookup (partial email x@r-prm.example.com does NOT match)
+  const h1 = hashPasswordWithRandomSalt("SamplePass123!");
+  const h2 = hashPasswordWithRandomSalt("SamplePass123!");
+  assert.notEqual(h1, h2, "Two hashes of the same password must differ due to random per-user salt");
+  assert.equal(verifyPasswordWithStoredSalt("SamplePass123!", h1), true);
+  assert.equal(verifyPasswordWithStoredSalt("WrongPass!", h1), false);
+  const partialLookup = await prisma.user.findUnique({
+    where: { email: "x@r-prm.example.com" },
+  });
+  assert.equal(
+    partialLookup,
+    null,
+    "Partial email x@r-prm.example.com must NOT match alex@r-prm.example.com"
+  );
+  console.log(
+    "✓ Fixture 25 passed (§16.2 S5/S6/S7): Per-user random salt scrypt hashes differ and partial email x@r-prm.example.com is rejected"
+  );
+
+  // Fixture 26 (§16.2 S8): Partner.bankDetailsJson is encrypted at rest (enc:v1:...) in PostgreSQL
+  const rawPartnersInDb = await prisma.partner.findMany();
+  for (const p of rawPartnersInDb) {
+    assert.equal(
+      p.bankDetailsJson.startsWith("enc:v1:"),
+      true,
+      `Partner ${p.id} bankDetailsJson in PostgreSQL must be encrypted (enc:v1:...), got ${p.bankDetailsJson.slice(0, 20)}`
+    );
+  }
+  const apexDecryptedBank = JSON.parse(decryptBankDetails(rawPartnersInDb[0].bankDetailsJson));
+  assert.ok(
+    apexDecryptedBank.bankName || apexDecryptedBank.iban,
+    "Encrypted bankDetailsJson must decrypt cleanly via decryptBankDetails()"
+  );
+  console.log(
+    `✓ Fixture 26 passed (§16.2 S8): All ${rawPartnersInDb.length} Partner.bankDetailsJson rows in PostgreSQL are encrypted at rest (enc:v1:...)`
+  );
+
+  // Fixture 27 (§16.2 S9 & §16.3 G5): Single-use hashed ActivationToken lifecycle & APP_BASE_URL link building
+  const testActEmail = "activate-fixture@partner.example.com";
+  const issuedAct = await issuePartnerActivationLink({
+    email: testActEmail,
+    name: "Fixture Invitee",
+    partnerId: "prt-1",
+    partnerName: "Apex Cloud Solutions Pte Ltd",
+    role: "Sales Rep",
+  });
+  assert.ok(
+    issuedAct.activationUrl.startsWith(`${getAppBaseUrl()}/p/activate?token=`),
+    `Activation URL must use APP_BASE_URL, got ${issuedAct.activationUrl}`
+  );
+  const firstRedeem = await redeemActivationTokenAndSetPassword(
+    issuedAct.rawToken,
+    "NewPartnerPassword_2026!"
+  );
+  assert.equal(firstRedeem.ok, true, "First redemption of valid activation token must succeed");
+  const secondRedeem = await redeemActivationTokenAndSetPassword(
+    issuedAct.rawToken,
+    "SecondAttemptPassword_2026!"
+  );
+  assert.equal(
+    secondRedeem.ok,
+    false,
+    "Reusing an already-redeemed activation token must be refused"
+  );
+  await prisma.activationToken.deleteMany({ where: { email: testActEmail } });
+  await prisma.user.deleteMany({ where: { email: testActEmail } });
+  console.log(
+    "✓ Fixture 27 passed (§16.2 S9 / §16.3 G5): Single-use hashed ActivationToken sets password once and refuses reuse"
+  );
+
+  // Fixture 28 (§16.2 S11 & §16.3 G2): Email HTML escaping (<script> escaped) & real SMTP delivery via local mock SMTP server
+  const xssRendered = renderEscapedEmailHtml({
+    subject: "Welcome <script>alert('xss')</script>",
+    body: "Hello {{partner.name}}!",
+    mergeFields: { "partner.name": "Bad <script>evil()</script> Partner" },
+  });
+  assert.equal(
+    xssRendered.html.includes("<script>"),
+    false,
+    "Rendered email HTML must escape <script> tags"
+  );
+  assert.equal(
+    xssRendered.html.includes("&lt;script&gt;"),
+    true,
+    "Rendered email HTML must contain escaped &lt;script&gt;"
+  );
+
+  // Spin up an ephemeral local SMTP server to verify EMAIL_DRIVER=smtp end-to-end
+  let smtpReceivedData = "";
+  const smtpServer = net.createServer((socket) => {
+    socket.write("220 localhost ESMTP MockMailpit\r\n");
+    let inData = false;
+    socket.on("data", (chunk) => {
+      const str = chunk.toString();
+      smtpReceivedData += str;
+      if (inData) {
+        if (str.includes("\r\n.\r\n")) {
+          inData = false;
+          socket.write("250 2.0.0 OK: queued\r\n");
+        }
+        return;
+      }
+      const lines = str.split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        const upper = line.toUpperCase();
+        if (upper.startsWith("EHLO") || upper.startsWith("HELO")) {
+          socket.write("250-localhost\r\n250 SIZE 10485760\r\n");
+        } else if (upper.startsWith("MAIL FROM")) {
+          socket.write("250 2.1.0 OK\r\n");
+        } else if (upper.startsWith("RCPT TO")) {
+          socket.write("250 2.1.5 OK\r\n");
+        } else if (upper.startsWith("DATA")) {
+          inData = true;
+          socket.write("354 End data with <CR><LF>.<CR><LF>\r\n");
+        } else if (upper.startsWith("QUIT")) {
+          socket.write("221 2.0.0 Bye\r\n");
+          socket.end();
+        }
+      }
+    });
+  });
+  await new Promise<void>((resolve) => smtpServer.listen(0, "127.0.0.1", resolve));
+  const smtpPort = (smtpServer.address() as net.AddressInfo).port;
+  const smtpSent = await sendEmailViaConnector(
+    {
+      to: "jordan.lee@apexcloud.example.com",
+      subject: "Live SMTP Verification",
+      body: "Delivered over local SMTP socket.",
+    },
+    {
+      ...process.env,
+      EMAIL_DRIVER: "smtp",
+      SMTP_HOST: "127.0.0.1",
+      SMTP_PORT: String(smtpPort),
+      SMTP_USER: "",
+      SMTP_PASS: "",
+    }
+  );
+  smtpServer.close();
+  assert.equal(smtpSent.driver, "smtp");
+  assert.ok(
+    smtpReceivedData.includes("Live SMTP Verification"),
+    "Local SMTP listener must receive email payload over SMTP protocol"
+  );
+  console.log(
+    "✓ Fixture 28 passed (§16.2 S11 / §16.3 G2): Email HTML escapes <script> and EMAIL_DRIVER=smtp delivers over SMTP protocol"
+  );
+
+  // Fixture 29 (§16.2 S13): Rate limiting & lockout after repeated bad login attempts
+  const rlKey = "test-rate-limit-fixture-key";
+  resetRateLimitKey(rlKey);
+  for (let i = 0; i < 8; i++) {
+    recordAuthFailure(rlKey);
+  }
+  const rlCheck = checkRateLimitKey(rlKey);
+  assert.equal(rlCheck.allowed, false, "8 failed login attempts must trigger temporary lockout");
+  resetRateLimitKey(rlKey);
+  console.log(
+    "✓ Fixture 29 passed (§16.2 S13): Rate limiter locks out after repeated failed attempts"
+  );
+
+  // Fixture 30 (§16.4 P1, P4, G9): Payout amounts equal sum of linked rewards (>0 rewards), two-list CSV account matching, and CSV import dry-run
+  const payoutsWithRewards = await prisma.payout.findMany({
+    include: { rewards: true },
+  });
+  assert.ok(payoutsWithRewards.length >= 2, "At least 2 payouts must exist");
+  for (const pay of payoutsWithRewards) {
+    assert.ok(
+      pay.rewards.length > 0,
+      `Payout ${pay.payoutNumber} must have >0 linked rewards`
+    );
+    const linkedSum = pay.rewards.reduce((s, r) => s + r.amountSgd, 0);
+    assert.equal(
+      pay.amountSgd,
+      linkedSum,
+      `Payout ${pay.payoutNumber} amountSgd (${pay.amountSgd}) must equal sum of linked rewards (${linkedSum})`
+    );
+  }
+
+  const matchedOverlaps = matchAccountListsByDomainAndName(
+    [
+      { accountName: "Marina Bay Holdings", domain: "https://www.marinabay.example.com" },
+      { accountName: "Vertex Logistics APAC", domain: "vertex.example.com" },
+      { accountName: "Unmatched Eber Corp", domain: "only-eber.example.com" },
+    ],
+    [
+      { partnerName: "Apex Cloud Solutions Pte Ltd", accountName: "Marina Bay Corp", domain: "marinabay.example.com" },
+      { partnerName: "Apex Cloud Solutions Pte Ltd", accountName: "Vertex Logistics", domain: "other-domain.example.com" },
+    ]
+  );
+  assert.equal(matchedOverlaps.filter((m) => m.hasOverlap).length, 2, "Expected 2 overlaps (1 by domain, 1 by company name)");
+  assert.equal(matchedOverlaps[0].matchedBy, "domain");
+  assert.equal(matchedOverlaps[1].matchedBy, "company_name");
+  assert.equal(matchedOverlaps[2].hasOverlap, false);
+
+  const mockAdminSession = {
+    sessionId: "test-sess",
+    userId: alexUser.id,
+    identityType: "coworker" as const,
+    role: "Administrator" as const,
+    name: "Alex Morgan",
+    email: "alex@r-prm.example.com",
+  };
+  const csvDryRunRes = await handleCsvImportMutation(mockAdminSession, {
+    objectType: "partners",
+    csvText: "name,country\nValid Imported Partner,Singapore\n,MissingNameRow",
+    dryRun: true,
+  });
+  const csvDryRunJson = await csvDryRunRes.json();
+  assert.equal(csvDryRunJson.validCount, 1);
+  assert.equal(csvDryRunJson.errorCount, 1);
+  console.log(
+    "✓ Fixture 30 passed (§16.4 P1/P4 & §16.3 G9): Payout amounts equal linked rewards sum, two-list CSV matcher computes domain/name overlaps, and CSV dry-run reports row errors"
+  );
+
+  console.log("\nALL 30 KNOWN-ANSWER PARITY, §13, §14, §15 & §16 GO-LIVE READINESS FIXTURES PASSED GREEN!");
   await prisma.$disconnect();
 }
 

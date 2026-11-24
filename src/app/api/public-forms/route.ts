@@ -4,6 +4,7 @@ import {
   resolvePartnerByLeadFormToken,
   getPartnerLeadFormToken,
 } from "@/lib/prmEngine";
+import { checkRateLimitKey, recordAuthFailure } from "@/lib/authSession";
 
 export const dynamic = "force-dynamic";
 
@@ -76,11 +77,26 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const clientIp =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "127.0.0.1";
+    const rateKey = `public_form:${clientIp}`;
+    const rateCheck = checkRateLimitKey(rateKey);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        {
+          error: `Rate limit exceeded for public form submissions. Retry in ${rateCheck.retryAfterSeconds}s.`,
+        },
+        { status: 429 }
+      );
+    }
+
     const body = await req.json();
-    const { formType, payload } = body;
+    const { formType } = body;
+    const payload = body.payload || body.data || {};
 
     if (formType === "public_lead") {
       if (!payload?.consentTerms72) {
+        recordAuthFailure(rateKey);
         return NextResponse.json(
           {
             error:
@@ -92,6 +108,7 @@ export async function POST(req: NextRequest) {
       const partners = await prisma.partner.findMany();
       const matched = resolvePartnerByLeadFormToken(payload.token, partners);
       if (!matched) {
+        recordAuthFailure(rateKey);
         return NextResponse.json(
           { error: "This link isn't valid" },
           { status: 404 }
