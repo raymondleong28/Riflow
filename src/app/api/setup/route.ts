@@ -8,7 +8,7 @@ import { getCookieOptions } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
-export async function isWorkspaceSetupRequired(): Promise<boolean> {
+async function isWorkspaceSetupRequired(): Promise<boolean> {
   const adminCount = await prisma.user.count({
     where: {
       identityType: "coworker",
