@@ -1,36 +1,36 @@
-# SPEC.md — R-PRM: Kiflo Parity Specification
+# SPEC.md — R-PRM Technical Specification
 
 ## 1. Objective
-Close the behavioural and engine gap between **R-PRM** and **Kiflo PRM**: every admin screen, partner-portal screen, setting, public intake form, detail view, and workflow must not only exist visually, but compute its numbers from records, enforce scoping and role permissions server-side, log audit trails, and persist cleanly.
+Deliver **R-PRM** as an independent, self-hosted partner relationship management application for a single installing organisation. Every admin view, partner-portal view, configuration setting, public intake form, detail page, and scheduled workflow computes its figures from database records, enforces role and tenant scoping on the server, logs an audit trail, and persists state in PostgreSQL 16.
 
-## 2. Acceptance Criteria
-- **Zero Hard-Coded KPIs (D4, D5):** Dashboard "Top sales partners" and Partner KPIs (`submittedLeads365d`, `registeredDeals365d`, `sourcedRevenue365d`, `influencedRev365d`, `pendingRewardsAll`) are computed dynamically from live `leads`, `deals`, and `rewards` records.
-- **Structured Commission & Reward Engine (D1–D3, §4.1):**
+## 2. Core Technical Requirements
+- **Computed Metrics Only:** Dashboard widgets, top partner rankings, and partner detail KPIs (`submittedLeads365d`, `registeredDeals365d`, `sourcedRevenue365d`, `influencedRev365d`, `pendingRewardsAll`) are computed dynamically from live `Lead`, `Deal`, `Transaction`, and `Reward` records.
+- **Integer Minor Units for Money:** All monetary columns in PostgreSQL and calculation engines use integer minor units (cents) with an explicit currency code.
+- **Structured Commission & Reward Engine:**
   - Program tier levels store structured reward rules (`trigger`, `conditions`, `valueType`, `amountMode`, `rateOrAmount`, `currency`, `duration`, `startOffsetMonths`, `durationMonths`, `rateSteps`, `requiresValidation`, `clawbackOnRefund`).
-  - Rule Builder UI modal on Program Levels tab supports Create, Edit, and Delete (with confirmation).
+  - Rule Builder UI modal on the Program Levels tab supports creating, editing, and deleting rules with confirmation.
   - Idempotent reward generation linked to source transaction/deal and rule.
-  - Full reward lifecycle: `Pending → Validated (Accepted) → In payout → Paid`, `Pending → Refused (with reason)`, `Validated/Paid → Clawed back` (creates negative adjustment record).
-  - Multi-currency transactions and rewards store original amount, currency, base amount (`SGD`), FX rate, FX rate date, and FX source.
-- **Server-Side Asset & Content Scoping (D6, §4.3):**
+  - Full reward lifecycle: `Pending → Validated (Accepted) → In payout → Paid`, `Pending → Refused (with reason)`, `Validated/Paid → Clawed back` (creates a negative adjustment record).
+  - Multi-currency transactions and rewards store original amount in minor units, currency, base amount in minor units, exchange rate, exchange rate date, and source.
+- **Server-Side Asset & Content Scoping:**
   - Assets support `"Who has access"`: `My team`, `Everyone`, or `Some partners` (Program Levels, Groups, Individual Partners combined via `OR`).
-  - Partner Portal endpoints filter assets server-side so a partner only sees assets matching their program/level/group/ID.
-- **Distinct Account Settings Tabs (D7, §5.2):**
-  - `Partner settings`, `Lead settings`, `Deal settings`, and `Payout settings` each render their own distinct Kiflo-authentic controls.
+  - Partner Portal endpoints filter assets server-side so a partner only sees assets matching their program, level, group, or partner ID.
+- **Account Settings & Governance:**
+  - Dedicated settings tabs for `Account defaults`, `Partner portal`, `Directories`, `Security`, `Partner settings`, `Lead settings`, `Deal settings`, `Payout settings`, `Properties`, `Account data`, `Integration`, and `Audit trail`.
   - `Account data → Reset data` requires typed confirmation (`RESET`).
-  - `Integration → API Access Tokens` shows raw token once at creation and stores/displays a hashed/masked token with revocation.
-- **Onboarding 6 Action Types (D8, §4.5):**
-  - Onboarding pipeline stages support all 6 action types: `View asset`, `Read article`, `Upload document`, `Provide information`, `Book meeting`, and `Opt-in/out from self-invoicing`, with admin validation gating.
-- **Automated Emails & Template Pickers (D9, §4.6):**
-  - Each program trigger (`Acknowledge partner signup`, `Notify accepted partner`, `Notify rejected partner`) is assigned a specific email template, and generates time-limited activation tokens at send time.
-- **Auth, Roles, Impersonation & Separate Partner Portal (D10, D12, §3, §4.4):**
-  - Separate Coworker (`/login`) and Partner (`/p/login`) login flows, server-side role checks, Audit Log table (`/api/audit`), and standalone Partner Portal at `/p` with no admin header.
-- **Computed Account Mapping Overlaps (D11, §5.3):**
-  - Overlaps are computed dynamically by matching normalized company name / domain across internal CRM accounts and partner account data sources.
-- **Per-Resource APIs (D13, §3) & All Missing Detail/Form Routes (§2.3):**
-  - Per-resource REST routes (`/api/partners`, `/api/programs`, `/api/leads`, `/api/deals`, `/api/customers`, `/api/transactions`, `/api/rewards`, `/api/payouts`, `/api/tasks`, `/api/assets`, `/api/audit`, `/api/auth`).
-  - All 9 missing detail pages (`/customers/[id]`, `/transactions/[id]`, `/tasks/[id]`, `/payouts/[id]`, `/rewards/[id]`, `/business-plans/[id]`, `/accounts/[id]`, `/collaborations/[id]`, `/team-members/[id]`) plus `/forms/lead/[uuid]` and `/forms/apply/[programId]`.
+  - `Integration → API Access Tokens` displays the raw token once at creation and stores only a hashed/masked token with revocation support.
+- **Onboarding Pipelines & 6 Action Types:**
+  - Explicit program-to-pipeline assignment (`onboardingPipelineId`). Missing program assignment returns an explicit error rather than falling back by name or default index.
+  - Onboarding pipeline stages support all 6 action types: `View asset`, `Read article`, `Upload document`, `Provide information`, `Book meeting`, and `Opt-in/out from self-invoicing`, with optional admin validation gating.
+- **Automated Emails & Activation Tokens:**
+  - Each program trigger (`Acknowledge partner signup`, `Notify accepted partner`, `Notify rejected partner`) binds to a specific email template and generates single-use, SHA-256 hashed activation tokens at send time.
+- **Authentication, MFA, Lockout & Partner Portal:**
+  - Separate Coworker (`/login`) and Partner (`/p/login`) authentication flows, database-backed login lockout counters, enforced TOTP MFA when required by workspace policy, server-side role checks, Audit Log table (`/api/audit`), and standalone Partner Portal at `/p`.
+- **Account Mapping Overlaps:**
+  - Overlaps are computed dynamically by matching normalized company name and domain across internal CRM accounts and partner account lists.
+- **REST Resource APIs & Detail Views:**
+  - Resource routes (`/api/partners`, `/api/programs`, `/api/leads`, `/api/deals`, `/api/customers`, `/api/transactions`, `/api/rewards`, `/api/payouts`, `/api/tasks`, `/api/assets`, `/api/audit`, `/api/auth`, `/api/setup`).
+  - Detail views (`/customers/[id]`, `/transactions/[id]`, `/tasks/[id]`, `/payouts/[id]`, `/rewards/[id]`, `/business-plans/[id]`, `/accounts/[id]`, `/collaborations/[id]`, `/team-members/[id]`) plus `/forms/lead/[uuid]` and `/forms/apply/[programId]`.
 
-## 3. Non-Goals (§8)
-- Billing/subscription management for R-PRM itself.
-- Re-creating Kiflo's marketing site or copying Kiflo's copyrighted copy/logos.
-- Mutating or migrating live Kiflo production records.
+## 3. Non-Goals
+- Multi-tenant SaaS billing, subscription management, or vendor super-admin screens.

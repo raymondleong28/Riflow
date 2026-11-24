@@ -1204,7 +1204,7 @@ export async function seedDatabase() {
       { category: "help_articles", name: "How to Register & Protect an Enterprise Deal", subtitle: "Collection: Getting Started for Partners · Updated 3 days ago", status: "Published", metadataJson: JSON.stringify({ collection: "Deal Registration", views: 312 }) },
       { category: "help_articles", name: "Connecting Your Bank Account & Downloading Self-Invoices", subtitle: "Collection: Commissions & Payouts · Updated 1 week ago", status: "Published", metadataJson: JSON.stringify({ collection: "Payouts & Billing", views: 245 }) },
       { category: "help_articles", name: "Uploading Customer Lists for Automated Account Mapping", subtitle: "Collection: Co-Selling & Overlaps · Updated 2 weeks ago", status: "Published", metadataJson: JSON.stringify({ collection: "Account Mapping", views: 178 }) },
-      // 6. Integrations (14 cards matching Kiflo)
+      // 6. Integrations (14 cards)
       { category: "integrations", name: "HubSpot", subtitle: "CRM · Bi-directional Deal, Lead & Contact Sync", status: "Connected", metadataJson: JSON.stringify({ type: "CRM", badge: "Connected" }) },
       { category: "integrations", name: "Salesforce", subtitle: "CRM · Enterprise Opportunity & Account Mapping Sync", status: "Available", metadataJson: JSON.stringify({ type: "CRM", badge: "" }) },
       { category: "integrations", name: "Stripe", subtitle: "Payment · Automated Subscription Transaction & Payout Sync", status: "Connected", metadataJson: JSON.stringify({ type: "Payment", badge: "Connected" }) },

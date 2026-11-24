@@ -196,7 +196,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Top Global Navigation Bar (Blue Theme + "R" Emblem Logo) */}
       <header className="sticky top-0 z-40 h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center space-x-1">
-          {/* "R" Logo replacing Kiflo's red "K" */}
+          {/* "R" Emblem Logo */}
           <Link
             href="/dashboard"
             onClick={closeMenus}

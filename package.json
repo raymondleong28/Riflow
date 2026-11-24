@@ -1,12 +1,12 @@
 {
-  "name": "r-prm-kiflo-clone",
+  "name": "r-prm",
   "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
     "build": "next build",
     "start": "next start -H 127.0.0.1",
-    "test": "tsx tests/parity-fixtures.test.ts",
+    "test": "tsx tests/fixtures.test.ts",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",

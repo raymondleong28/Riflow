@@ -62,7 +62,7 @@ export default function OverlapsListPage() {
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              {/* Grouped Column Bands matching Kiflo */}
+              {/* Grouped Column Bands */}
               <tr className="border-b border-slate-200 bg-blue-50/70 text-blue-900 font-bold">
                 <th colSpan={4} className="py-2 px-4 border-r border-blue-100">
                   Your accounts

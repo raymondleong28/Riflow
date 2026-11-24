@@ -13,8 +13,8 @@ const ONBOARDING_STAGES = [
   "Completed",
 ];
 
-// Kiflo's 6 Verified Onboarding Stage Action Types (§4.5 / D8)
-const KIFLO_6_ACTION_TYPES = [
+// 6 Verified Onboarding Stage Action Types (§4.5 / D8)
+const ONBOARDING_ACTION_TYPES = [
   {
     type: "view_asset",
     label: "1. View asset",
@@ -417,7 +417,7 @@ export default function PartnerOnboardingPage() {
           >
             <div className="px-5 py-4 bg-blue-600 text-white flex items-center justify-between">
               <h3 className="font-bold text-sm">
-                Configure Onboarding Stage Action (6 Kiflo Action Types)
+                Configure Onboarding Stage Action (6 Action Types)
               </h3>
               <button
                 type="button"

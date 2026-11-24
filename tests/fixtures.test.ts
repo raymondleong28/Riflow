@@ -52,7 +52,7 @@ import {
 } from "../src/lib/importAndEmailHelpers";
 
 async function runFixtures() {
-  console.log("Running R-PRM Known-Answer Parity Fixtures (§3 Slice 0d & §4.1.4)...");
+  console.log("Running R-PRM Known-Answer Fixtures...");
 
   // 1. Database baseline fixtures (Transactions & Deals)
   const [transactions, deals, partners, leads, rewards, manageItems, accounts] =
@@ -1211,12 +1211,12 @@ async function runFixtures() {
     "✓ Fixture 30 passed (§16.4 P1/P4 & §16.3 G9): Payout amounts equal linked rewards sum, two-list CSV matcher computes domain/name overlaps, and CSV dry-run reports row errors"
   );
 
-  console.log("\nALL 30 KNOWN-ANSWER PARITY, §13, §14, §15 & §16 GO-LIVE READINESS FIXTURES PASSED GREEN!");
+  console.log("\nALL 30 KNOWN-ANSWER & GO-LIVE READINESS FIXTURES PASSED GREEN!");
   await prisma.$disconnect();
 }
 
 runFixtures().catch(async (err) => {
-  console.error("Parity fixture failure:", err);
+  console.error("Fixture failure:", err);
   await prisma.$disconnect();
   process.exit(1);
 });

@@ -233,7 +233,7 @@ export default function AccountRootPage() {
       <div className="mb-5">
         <h1 className="text-xl font-bold text-slate-900">Account Settings</h1>
         <p className="text-xs text-slate-500">
-          Distinct Kiflo-parity configuration tabs across Partner, Lead, Deal,
+          Workspace configuration tabs across Partner, Lead, Deal,
           Payout, Security, Custom Properties, and Audit Trail
         </p>
       </div>
@@ -664,7 +664,7 @@ export default function AccountRootPage() {
             </div>
           )}
 
-          {/* 7. DEAL SETTINGS (All 9 Kiflo Deal Options) */}
+          {/* 7. DEAL SETTINGS */}
           {activeTab === "deals" && (
             <div className="space-y-5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -1103,7 +1103,7 @@ export default function AccountRootPage() {
                 </h2>
               </div>
               <div className="p-3.5 rounded-xl bg-slate-900 text-blue-200 font-mono text-[11px] overflow-x-auto">
-                {`<script src="https://cdn.r-prm.example.com/r.js" data-account="68128177" async></script>`}
+                {`<script src="https://cdn.r-prm.example.com/r.js" data-account="${acct.workspaceId || acct.workspaceSlug || "r-cloud-global"}" async></script>`}
               </div>
               <button
                 onClick={() =>

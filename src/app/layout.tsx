@@ -5,7 +5,7 @@ import { AppShell } from "@/components/AppShell";
 
 export const metadata: Metadata = {
   title: "R-PRM | Partner Relationship Management Cloud",
-  description: "Full-featured Blue R-PRM platform cloned from Kiflo PRM specification.",
+  description: "Self-hosted Partner Relationship Management platform for managing programs, partners, leads, deals, commissions, and payouts.",
 };
 
 export default function RootLayout({

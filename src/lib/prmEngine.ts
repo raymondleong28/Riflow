@@ -366,7 +366,7 @@ export function computePartnerKpis(
 // Unguessable Per-Partner Public Lead Form Token (§13.1 & §13.7 #5)
 // Raw guessable partner IDs (like "prt-1") are rejected; only the unguessable token resolves.
 export function getPartnerLeadFormToken(partnerId: string): string {
-  const input = `r-prm-unguessable-lead-form-salt-2026:${String(partnerId)}:eber-kiflo-parity`;
+  const input = `r-prm-unguessable-lead-form-salt-2026:${String(partnerId)}:r-prm-workspace`;
   // Deterministic 96-bit (24-hex) multi-lane FNV-1a / SipHash-style mixer (universal client+server)
   const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b];
   const hexParts = seeds.map((seed, lane) => {

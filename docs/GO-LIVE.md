@@ -1,99 +1,85 @@
-# GO-LIVE.md — R-PRM Production Cutover Runbook (§16 Go-Live Readiness)
+# GO-LIVE.md — R-PRM Production Cutover Runbook
 
-> **Purpose:** Every step required to take R-PRM from local verification (`http://127.0.0.1:3000`) to production go-live requires **only environment variables, external accounts, and DNS configuration — zero code changes**.
-> **Rule (§16.0):** Every line in this file matches the running code at the commit it is written in.
-
----
-
-## 1. Environment Variables & Fail-Closed Startup (`src/lib/config.ts`, `src/lib/connectors.ts`)
-
-All secrets and driver selections are validated by `loadAndValidateAppSecrets()` (`src/lib/config.ts`) and `loadAndValidateConnectorConfig()` (`src/lib/connectors.ts`). **There are zero secret fallbacks or hard-coded passwords in `src/`.**
-
-### 1.1 Required Core Environment Variables (App Refuses to Start if Missing or Invalid)
-
-| Variable | Requirement | Enforcement in Code |
-|---|---|---|
-| `DATABASE_URL` | PostgreSQL connection URL (`postgresql://...`) | Validated by `loadAndValidateConnectorConfig()`. Must start with `postgres://` or `postgresql://`. |
-| `SESSION_SECRET` | `>= 32` bytes (e.g. `openssl rand -hex 32`) | Validated by `getSessionSecret()` in `src/lib/config.ts`. Used to HMAC-sign session ID cookies (`rprm_session`). Throws `FAIL_CLOSED` if unset or `< 32` characters. |
-| `BANK_ENCRYPTION_KEY` | `>= 32` bytes (e.g. `openssl rand -hex 32`) | Validated by `getBankEncryptionKeyBuffer()` in `src/lib/config.ts`. Used for AES-256-GCM encryption (`enc:v1:<iv>:<tag>:<ciphertext>`) of `Partner.bankDetailsJson`. Throws `FAIL_CLOSED` if unset or `< 32` characters. |
-| `APP_BASE_URL` | Base origin (e.g. `https://partners.eber.co` in prod, `http://127.0.0.1:3000` in dev) | Used by `getAppBaseUrl()` in `src/lib/config.ts` to build activation links (`/p/activate?token=...`), public forms, and referral URLs. When `APP_BASE_URL` starts with `https://`, session cookies set `secure: true` (`G8`). |
-| `CRON_SECRET` | High-entropy bearer secret (`>= 16` chars) | Checked by `POST /api/scheduler` (`src/app/api/scheduler/route.ts`) when called headlessly via `Authorization: Bearer $CRON_SECRET`. Fails closed (`HTTP 503`) if `CRON_SECRET` is unset. |
-
-### 1.2 Seed-Only Environment Variables (Refused in Production)
-
-| Variable | Requirement | Enforcement in Code |
-|---|---|---|
-| `SEED_ADMIN_PASSWORD` | Password used by `prisma/seed.ts` to hash coworker accounts | `prisma/seed.ts` refuses to run when `NODE_ENV=production` (`S5`, `G10`) and throws if `SEED_ADMIN_PASSWORD` or `SEED_PARTNER_PASSWORD` is missing. |
-| `SEED_PARTNER_PASSWORD` | Password used by `prisma/seed.ts` to hash seeded partner accounts | Hashed with a per-user random 16-byte salt (`scrypt:<saltHex>:<keyHex>`) into the `User` table (`S6`, `S7`). |
+> **Purpose:** Every step required to take R-PRM from local verification (`http://127.0.0.1:3000`) to a live production environment requires **only environment variables, external accounts, and DNS configuration — zero code changes**.
 
 ---
 
-## 2. Connector Drivers: Implemented Live vs Fail-Closed (`§16.3 G1 & G2`)
+## 1. Local vs Live Service Matrix (AGENTS.md §5)
+
+| Service | Local now | Live |
+|---|---|---|
+| **Hosting + database** | Mac + local PostgreSQL 16 | Host with managed PostgreSQL 16, daily automated backups, tested `pg_restore` |
+| **Domain + HTTPS** | `http://127.0.0.1:3000` | DNS record, TLS certificate; `APP_BASE_URL=https://…` (secure cookies follow automatically) |
+| **Email** | Outbox (`EMAIL_DRIVER=local`) or local SMTP catcher | `EMAIL_DRIVER=smtp` + SMTP settings (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`); SPF, DKIM, DMARC on sending domain |
+| **File storage** | Disk outside `public/` (`STORAGE_DRIVER=disk`, `storage/uploads/`) | Disk on a persistent volume (`STORAGE_DRIVER=disk`), or S3-compatible driver once built |
+| **Scheduler** | `npm run scheduler` | Host cron calling `POST /api/scheduler` with `Authorization: Bearer $CRON_SECRET` |
+| **Monitoring** | Application logs | Uptime check on `GET /api/health`, error alerts |
+| **Payouts, HubSpot, SSO, exchange-rate API** | Manual (`PAYOUT_DRIVER=manual`), mock (`HUBSPOT_DRIVER=mock`), password + MFA (`SSO_DRIVER=password`), rate table (`FX_DRIVER=table`) | Each needs its live driver built in code before enabling; selecting `wise`, `stripe`, `live`, `saml`, or `api` today refuses to start (fail closed) |
+
+---
+
+## 2. Environment Variables & Fail-Closed Startup (`src/lib/config.ts`, `src/lib/connectors.ts`)
+
+All secrets and driver selections are validated at startup by `loadAndValidateAppSecrets()` and `loadAndValidateConnectorConfig()`. **There are zero secret fallbacks or hard-coded passwords in `src/`.**
+
+### 2.1 Required Core Environment Variables
+
+| Variable | Requirement | Enforcement in Code |
+|---|---|---|
+| `DATABASE_URL` | PostgreSQL 16 connection URL (`postgresql://...`) | Validated by `loadAndValidateConnectorConfig()`. Must start with `postgres://` or `postgresql://`. |
+| `SESSION_SECRET` | `>= 32` characters (e.g. `openssl rand -hex 32`) | Validated by `getSessionSecret()`. Used to HMAC-sign session cookies (`rprm_session`). Throws `FAIL_CLOSED` if unset or `< 32` characters. |
+| `BANK_ENCRYPTION_KEY` | `>= 32` characters (e.g. `openssl rand -hex 32`) | Validated by `getBankEncryptionKeyBuffer()`. Used for AES-256-GCM encryption (`enc:v1:<iv>:<tag>:<ciphertext>`) of `Partner.bankDetailsJson`. Throws `FAIL_CLOSED` if unset or `< 32` characters. |
+| `APP_BASE_URL` | Base origin (e.g. `https://partners.yourdomain.com` in production; `http://127.0.0.1:3000` locally) | Required when `NODE_ENV=production` (F3 — refuses to start if missing in production). When `APP_BASE_URL` starts with `https://`, session cookies automatically set `secure: true`. |
+| `CRON_SECRET` | High-entropy bearer secret (`>= 16` chars) | Checked by `POST /api/scheduler` when called headlessly via `Authorization: Bearer $CRON_SECRET`. Fails closed (`HTTP 503`) if unset. |
+| `SETUP_TOKEN` | One-time first-run setup token (`>= 16` chars) | Required in production (`NODE_ENV=production`) to submit `/setup` and claim a fresh installation (§3.2). |
+
+### 2.2 Demo-Only Environment Variables (Refused in Production)
+
+| Variable | Requirement | Enforcement in Code |
+|---|---|---|
+| `SEED_ADMIN_PASSWORD` | Password used by `npm run demo:seed` for demo coworker accounts | `npm run demo:seed` refuses to run when `NODE_ENV=production` or when any non-demo data exists. |
+| `SEED_PARTNER_PASSWORD` | Password used by `npm run demo:seed` for demo partner accounts | Hashed with a per-user random 16-byte salt (`scrypt:<saltHex>:<keyHex>`) into the `User` table. |
+
+---
+
+## 3. Connector Drivers: Implemented vs Fail-Closed (F5)
 
 Every external boundary is controlled by a driver environment variable in `src/lib/connectors.ts`. Drivers that are not implemented in code **fail closed (`FAIL_CLOSED`)** when selected rather than returning fake success.
 
-| Boundary | Driver Variable | Implemented Values (Working Today) | Unimplemented Values (Fail Closed with Explicit Error) |
+| Boundary | Driver Variable | Implemented Values (Working Today) | Unimplemented Values (Fail Closed at Startup) |
 |---|---|---|---|
-| **Outbound Email** | `EMAIL_DRIVER` | `local` (writes escaped HTML to in-app Outbox `ManageItem`)<br>`smtp` (delivers real email via `nodemailer` using `SMTP_HOST`, `SMTP_PORT`, optional `SMTP_USER`/`SMTP_PASS`, `EMAIL_FROM` — works with local Mailpit or authenticated SMTP like Gmail/SendGrid/Postmark) | If `EMAIL_DRIVER=smtp` and `SMTP_HOST` is missing, throws `FAIL_CLOSED`. |
-| **File Storage** | `STORAGE_DRIVER` | `local` (writes uploaded files to private `storage/uploads/` outside `public/` with a 15 MB size limit and extension allowlist; served only through authenticated `GET /api/files/[key]`) | `s3` — **Not implemented yet.** Setting `STORAGE_DRIVER=s3` throws `FAIL_CLOSED: STORAGE_DRIVER=s3 is not implemented in code yet`. |
-| **Payout Provider** | `PAYOUT_DRIVER` | `manual` (records manual bank transfer reference and marks payout `Paid`) | `wise`, `stripe` — **Not implemented yet.** Setting `PAYOUT_DRIVER=wise` or `stripe` throws `FAIL_CLOSED`. |
-| **CRM Sync** | `HUBSPOT_DRIVER` | `disabled` (logs skipped CRM sync locally) | `live` — **Not implemented yet.** Setting `HUBSPOT_DRIVER=live` throws `FAIL_CLOSED`. |
-| **FX Rates** | `FX_DRIVER` | `table` (uses dated FX rate table in `src/lib/prmEngine.ts`) | `api` — Throws `FAIL_CLOSED` unless `FX_API_KEY` is provided. |
-| **SSO / SAML** | `SSO_DRIVER` | `password` (database-backed `User` + server-side `Session` + TOTP MFA) | `saml` — Throws `FAIL_CLOSED` unless `SAML_ENTRY_POINT` and `SAML_CERT` are provided. |
+| **Outbound Email** | `EMAIL_DRIVER` | `local` (writes escaped HTML to in-app Outbox)<br>`smtp` (delivers real email via `nodemailer` using `SMTP_HOST`, `SMTP_PORT`, optional `SMTP_USER`/`SMTP_PASS`, `EMAIL_FROM`) | If `EMAIL_DRIVER=smtp` and `SMTP_HOST` is missing, throws `FAIL_CLOSED`. |
+| **File Storage** | `STORAGE_DRIVER` | `disk` / `local` (writes uploaded files to private `storage/uploads/` outside `public/` with a 15 MB size limit and extension allowlist; served only through authenticated `GET /api/files/[key]`) | `s3` — **Not implemented yet.** Throws `FAIL_CLOSED`. |
+| **Payout Provider** | `PAYOUT_DRIVER` | `manual` (records manual bank transfer reference and marks payout `Paid`) | `wise`, `stripe` — **Not implemented yet.** Throws `FAIL_CLOSED`. |
+| **CRM Sync** | `HUBSPOT_DRIVER` | `mock` / `disabled` (logs skipped CRM sync locally) | `live` — **Not implemented yet.** Throws `FAIL_CLOSED`. |
+| **FX Rates** | `FX_DRIVER` | `table` (uses dated exchange rate table in `src/lib/prmEngine.ts`) | `api` — **Not implemented yet (F5).** Throws `FAIL_CLOSED`. |
+| **SSO / SAML** | `SSO_DRIVER` | `password` / `local` (database-backed `User` + server-side `Session` + enforced TOTP MFA) | `saml` — **Not implemented yet (F5).** Throws `FAIL_CLOSED`. |
 
 ---
 
-## 3. Database & Baseline Migration (`§16.3 G4`)
+## 4. First-Run Database Migration & Setup (§3.2)
 
-1. Provision a PostgreSQL 16 database (`rprm_kiflo_parity` or production equivalent).
-2. Set `DATABASE_URL` in the environment.
-3. Apply the committed baseline migration (`prisma/migrations/0001_baseline/migration.sql`):
+1. Provision a PostgreSQL 16 database.
+2. Set `DATABASE_URL`, `SESSION_SECRET`, `BANK_ENCRYPTION_KEY`, `APP_BASE_URL`, `CRON_SECRET`, and `SETUP_TOKEN` in the production environment.
+3. Apply committed migrations:
    ```bash
-   npx prisma migrate deploy
+   npm run db:migrate
    ```
-4. Verify migration status:
+   A newly migrated database contains **no** partners, programs, demo data, or user accounts.
+4. Build and start the server:
    ```bash
-   npx prisma migrate status
-   # Output: 1 migration found in prisma/migrations — Database schema is up to date!
+   npm run build
+   npm run start
    ```
-5. **Production note (`G10`):** Do **not** run `npx prisma db seed` in production (`prisma/seed.ts` aborts immediately when `NODE_ENV=production`). Instead, create the initial coworker Administrator user or import real records via the CSV Importer (`CSV_IMPORT`).
+5. Open the application in a browser. Because no administrator exists yet, every route redirects to `/setup`.
+6. Enter the `SETUP_TOKEN`, workspace name, timezone, main currency, and the first administrator's name, email, and password. On submit, R-PRM creates the workspace settings and the administrator account, signs you in, and permanently disables `/setup`.
 
 ---
 
-## 4. Health Check & Scheduler Wiring (`§16.3 G6 & G7`)
+## 5. Pre-Launch Checklist (Before Real Data)
 
-### 4.1 Health Endpoint (`GET /api/health`)
-- Publicly reachable for load-balancer probes (`src/middleware.ts` allows `/api/health`).
-- Returns `HTTP 200` (`status: "ok"`) when:
-  1. `SESSION_SECRET` and `BANK_ENCRYPTION_KEY` pass length validation (`secretsValid: true`).
-  2. PostgreSQL is reachable (`SELECT 1`).
-  3. Prisma `_prisma_migrations` confirms `0001_baseline` is applied (`appliedMigrations >= 1`).
-  4. All configured connector drivers pass `loadAndValidateConnectorConfig()`.
-- Never outputs any secret values.
-
-### 4.2 Durable Scheduler (`POST /api/scheduler` & `npm run scheduler`)
-- To trigger scheduled jobs from system cron, Kubernetes CronJob, or GitHub Actions without a browser session:
-  ```bash
-  curl -X POST "$APP_BASE_URL/api/scheduler" \
-    -H "Authorization: Bearer $CRON_SECRET" \
-    -H "Content-Type: application/json" \
-    -d '{"job":"all"}'
-  ```
-- Or run the local CLI helper:
-  ```bash
-  npm run scheduler
-  ```
-- Jobs executed and logged to `WorkflowRunLog`:
-  1. `invitation_nurture` (2d reminder → 3d reminder → 2d internal task).
-  2. `deal_expiration` (30d/7d/1d warnings + auto-expire).
-  3. `monthly_payouts` (auto-bundles validated rewards meeting threshold).
-  4. `custom_workflows` (evaluates structured conditions `field / operator / value` and runs structured actions `send_email | wait_days | create_task | update_field`).
-
----
-
-## 5. Security & Data Protection Verification Checklist
-
-- **Server-side Sessions (`S2`, `S3`):** Every login creates a row in the `Session` table (`id`, `userId`, `impersonatingPartnerId`, `createdAt`, `expiresAt`, `revokedAt`). The `rprm_session` cookie holds only `<sessionId>.<hmacSignature>`. Logging out or changing a password revokes the server-side `Session` row immediately.
-- **Private Uploads (`S4`, `G3`):** `POST /api/upload` requires an authenticated session (`401` if logged out), enforces a 15 MB size limit and extension allowlist (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.csv`, `.txt` — `.html` is rejected with `400`), stores files in `storage/uploads/` outside `public/`, and serves them only via `GET /api/files/[key]` (`401` when logged out).
-- **Bank Details Encryption at Rest (`S8`):** Every write to `Partner.bankDetailsJson` encrypts the JSON with AES-256-GCM (`enc:v1:...`). Raw database queries see only ciphertext. Decryption occurs only on single-partner reads (`GET /api/partners?id=...`) for authorized roles (`Administrator`, `Manager`, or the partner's own `Manager`).
-- **Single-Use Hashed Activation Tokens (`S9`, `G5`):** Accepting a partner application or inviting a partner contact generates a 32-byte random token, stores only its SHA-256 hash in `ActivationToken` with a 72-hour expiry, and emails `${APP_BASE_URL}/p/activate?token=<rawToken>`. Visiting `/p/activate` lets the invitee set their own password, marks `usedAt`, and signs them in. Reusing or using an expired token is refused (`400`).
+- [ ] PDPA consent wording approved for public partner application and lead forms.
+- [ ] Security review passed (`npm run typecheck && npm test && npm run build`).
+- [ ] No demo/test accounts present (`@*.example.com` logins are automatically blocked when `NODE_ENV=production`).
+- [ ] `SETUP_TOKEN` configured and `/setup` completed by the administrator.
+- [ ] Automated daily PostgreSQL backups (`pg_dump`) and `storage/uploads/` backups tested with a full restore drill.
