@@ -2,9 +2,13 @@
 
 1. **Sole Writer Rule (§1.1):**
    - Antigravity is sole writer on branch `antigravity/kiflo-parity` from 24 Nov 2026; other tools are read-only reviewers on this branch.
-2. **Accidental Preset Reward Cleanup (§2.5):**
-   - The accidental `"SGD 1,000 Quarterly Quota Accelerator Bonus"` preset insertion button (`D2`) has been replaced with an interactive Structured Rule Builder Modal that never saves until confirmed. Existing data is preserved unless explicitly deleted by the admin via the new Delete Rule confirmation dialog.
-3. **ASSUMPTION — Asset Scoping Combination Logic (§4.3 / D6):**
+2. **Accidental Preset Reward Cleanup (§2.5 & §14.2 Slice 1):**
+   - Ray approved removal of the accidental `"SGD 1,000 Quarterly Quota Accelerator Bonus"` preset reward from Silver Tier of `prog-strategic`. It has been removed from PostgreSQL, seed scripts, and sync scripts, with an immutable `DELETE` entry recorded in `AuditLog`.
+3. **Database Engine Cutover to Local PostgreSQL 16 (§3 Slice 0b, §14.2 Slice 3 & §15.2 Slice 1):**
+   - Installed and started `postgresql@16` (`16.16`) via Homebrew (`sh.brew.postgresql@16` on `127.0.0.1:5432`), switched `prisma/schema.prisma` to `provider = "postgresql"`, migrated all tables and records with identical IDs, relationships, and amounts into database `rprm_kiflo_parity`, and deleted `prisma/dev.db`.
+4. **Partner-Facing Explicit Field Allowlists (§15.2 Slice 2 & Slice 3):**
+   - Built one explicit partner serializer per partner-reachable object type in `src/lib/partnerSerializer.ts`. Partner sessions never receive raw `metadataJson`, `awardedPartners`, email template subjects, other partners' names, or coworker-only `account_settings` fields (SSO, MFA policy, validation strategy, conflict detection, deal expiry, payout schedule/threshold).
+5. **ASSUMPTION — Asset Scoping Combination Logic (§4.3 / D6):**
    - When an asset's `"Who has access"` is set to `"Some partners"`, the three pickers (`programLevels`, `groups`, `partnerIds`) are evaluated with **OR** logic (an authenticated partner can access the asset if they match any configured picker, or if a picker is empty/unrestricted within the selected scope).
 4. **ASSUMPTION — Application Acceptance Modes (§4.6):**
    - Partner application review supports both Kiflo acceptance modes:

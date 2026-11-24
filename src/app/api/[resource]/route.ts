@@ -11,6 +11,23 @@ import {
 } from "@/lib/prmEngine";
 import { getServerSession, RprmSession } from "@/lib/authSession";
 import { executePayoutConnector, syncDealToHubSpotConnector } from "@/lib/connectors";
+import {
+  serializePartnerForPartner,
+  serializeProgramForPartner,
+  serializeLeadForPartner,
+  serializeDealForPartner,
+  serializeCustomerForPartner,
+  serializeTransactionForPartner,
+  serializeRewardForPartner,
+  serializePayoutForPartner,
+  serializeManageItemForPartner,
+  serializeBusinessPlanForPartner,
+  serializeCollaborationForPartner,
+  serializeTrackingLinkForPartner,
+  serializeTeamMemberForPartner,
+  serializeNoteForPartner,
+  serializeSettingsForPartner,
+} from "@/lib/partnerSerializer";
 
 export const dynamic = "force-dynamic";
 
@@ -194,6 +211,13 @@ export async function GET(
           ? computed.filter((p) => p.id === scopedPartner.id)
           : computed;
 
+        if (session.identityType === "partner") {
+          records = scoped.map((p) =>
+            serializePartnerForPartner(p, Boolean(id && session.role === "Manager"))
+          );
+          break;
+        }
+
         // §13.1 Bank details lockdown: strip bankDetailsJson from all collection list responses!
         // Return bankDetailsJson ONLY on single-partner requests (?id=...) to authorized roles.
         if (!id) {
@@ -217,46 +241,16 @@ export async function GET(
           computePartnerKpis(p, leads, deals, rewards)
         );
 
-        // §14.2 Slice 2: Partner sessions receive ONLY their own program, and within it ONLY the level they are on!
+        // §14.2 Slice 2 & §15.2 Slice 2: Partner sessions receive ONLY their own program, and within it ONLY the level they are on!
         if (session.identityType === "partner" && scopedPartner) {
           const ownProg = programsRaw.find(
             (pr) =>
               pr.id === scopedPartner.programId ||
               pr.name === scopedPartner.programName
           );
-          if (!ownProg) {
-            records = [];
-            break;
-          }
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          let levels: any[] = [];
-          try {
-            levels = JSON.parse(ownProg.levelsJson || "[]");
-          } catch {
-            levels = [];
-          }
-          const ownLevelOnly = levels
-            .filter((lvl) => lvl.name === scopedPartner.qualifyingLevel)
-            .map((lvl) => ({
-              id: lvl.id,
-              name: lvl.name,
-              badgeColor: lvl.badgeColor,
-              rewards: Array.isArray(lvl.rewards)
-                ? lvl.rewards.map(normalizeRewardRule)
-                : [],
-              benefits: lvl.benefits || [],
-              requirements: lvl.requirements || [],
-            }));
-          records = [
-            {
-              id: ownProg.id,
-              name: ownProg.name,
-              levelsJson: JSON.stringify(ownLevelOnly),
-              permissionsJson: ownProg.permissionsJson,
-              termsRequired: ownProg.termsRequired,
-              termsUrl: ownProg.termsUrl,
-            },
-          ];
+          records = ownProg
+            ? [serializeProgramForPartner(ownProg, scopedPartner.qualifyingLevel)]
+            : [];
           break;
         }
 
@@ -313,6 +307,9 @@ export async function GET(
           records = records.filter(
             (l) => l.sourcePartnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeLeadForPartner);
+          }
         }
         break;
 
@@ -324,6 +321,9 @@ export async function GET(
           records = records.filter(
             (d) => d.partnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeDealForPartner);
+          }
         }
         break;
 
@@ -335,6 +335,9 @@ export async function GET(
           records = records.filter(
             (c) => c.sourcePartnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeCustomerForPartner);
+          }
         }
         break;
 
@@ -346,6 +349,9 @@ export async function GET(
           records = records.filter(
             (t) => t.partnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeTransactionForPartner);
+          }
         }
         break;
 
@@ -357,6 +363,9 @@ export async function GET(
           records = records.filter(
             (r) => r.partnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeRewardForPartner);
+          }
         }
         break;
 
@@ -365,10 +374,10 @@ export async function GET(
           orderBy: { createdAt: "desc" },
         });
         if (scopedPartner) {
-          // §4.2: Partner-side list omits internal Invoice field
+          // §4.2 & §15.2 Slice 2: Partner-side list omits internal Invoice field via allowlist serializer
           records = records
             .filter((p) => p.partnerName === scopedPartner.name)
-            .map(({ invoiceRef: _inv, ...rest }) => rest);
+            .map(serializePayoutForPartner);
         }
         break;
 
@@ -383,14 +392,28 @@ export async function GET(
         break;
 
       case "assets": {
-        // §13.1 D6 Fix: Scope on the server from the session, NEVER from a query parameter!
+        // §13.1 D6 & §15.2 Slice 2: Scope on server from session and return explicit partner allowlist (no metadataJson!)
         const allAssets = await prisma.manageItem.findMany({
           where: { category: "assets" },
           orderBy: { createdAt: "desc" },
         });
-        records = scopedPartner
-          ? allAssets.filter((a) => canPartnerAccessAsset(a, scopedPartner))
-          : allAssets;
+        if (scopedPartner) {
+          const allowed = allAssets.filter((a) =>
+            canPartnerAccessAsset(a, scopedPartner)
+          );
+          records =
+            session.identityType === "partner"
+              ? allowed.map((a) =>
+                  serializeManageItemForPartner(
+                    a,
+                    scopedPartner.name,
+                    scopedPartner.programName
+                  )
+                )
+              : allowed;
+        } else {
+          records = allAssets;
+        }
         break;
       }
 
@@ -398,38 +421,28 @@ export async function GET(
         const allItems = await prisma.manageItem.findMany({
           orderBy: { createdAt: "desc" },
         });
-        records = scopedPartner
-          ? allItems.filter((item) => {
-              if (item.category === "assets") {
-                return canPartnerAccessAsset(item, scopedPartner);
-              }
-              if (item.category === "news") {
-                const sub = `${item.subtitle} ${item.metadataJson}`.toLowerCase();
-                if (
-                  sub.includes("gold") &&
-                  !scopedPartner.qualifyingLevel.toLowerCase().includes("gold")
-                ) {
-                  // Sanitize or scope news that references other tiers
-                  return true;
-                }
-                return true;
-              }
-              return ["help_articles", "certifications"].includes(
-                item.category
-              );
-            }).map((item) => {
-              if (item.category === "news") {
-                return {
-                  ...item,
-                  subtitle: item.subtitle.replace(
-                    /Visible to All Strategic & Gold Partners/gi,
-                    `Visible to ${scopedPartner.programName}`
-                  ),
-                };
-              }
-              return item;
-            })
-          : allItems;
+        if (scopedPartner) {
+          const allowed = allItems.filter((item) => {
+            if (item.category === "assets") {
+              return canPartnerAccessAsset(item, scopedPartner);
+            }
+            return ["news", "help_articles", "certifications"].includes(
+              item.category
+            );
+          });
+          records =
+            session.identityType === "partner"
+              ? allowed.map((item) =>
+                  serializeManageItemForPartner(
+                    item,
+                    scopedPartner.name,
+                    scopedPartner.programName
+                  )
+                )
+              : allowed;
+        } else {
+          records = allItems;
+        }
         break;
       }
 
@@ -441,6 +454,9 @@ export async function GET(
           records = records.filter(
             (bp) => bp.partnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeBusinessPlanForPartner);
+          }
         }
         break;
 
@@ -466,6 +482,9 @@ export async function GET(
           records = records.filter(
             (c) => c.partnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeCollaborationForPartner);
+          }
         }
         break;
 
@@ -489,6 +508,9 @@ export async function GET(
           records = records.filter(
             (l) => l.partnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeTrackingLinkForPartner);
+          }
         }
         break;
 
@@ -500,6 +522,9 @@ export async function GET(
           records = records.filter(
             (m) => m.partnerName === scopedPartner.name
           );
+          if (session.identityType === "partner") {
+            records = records.map(serializeTeamMemberForPartner);
+          }
         }
         break;
 
@@ -508,19 +533,41 @@ export async function GET(
           orderBy: { createdAt: "desc" },
         });
         if (scopedPartner) {
-          records = records.filter((n) => n.isShared);
+          records = records.filter(
+            (n) =>
+              n.isShared &&
+              (n.entityId === scopedPartner.id ||
+                n.author
+                  .toLowerCase()
+                  .includes(scopedPartner.contactFirstName.toLowerCase()))
+          );
+          if (session.identityType === "partner") {
+            records = records.map(serializeNoteForPartner);
+          }
         }
         break;
 
       case "settings": {
         const rows = await prisma.appSetting.findMany();
-        const settingsMap: Record<string, unknown> = {};
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const settingsMap: Record<string, any> = {};
         for (const row of rows) {
           try {
             settingsMap[row.key] = JSON.parse(row.valueJson);
           } catch {
             settingsMap[row.key] = row.valueJson;
           }
+        }
+        // §15.2 Slice 3: Partner sessions receive ONLY portal branding, main currency, payout providers, self-invoicing enabled, and their own user_preferences!
+        if (session.identityType === "partner") {
+          return NextResponse.json({
+            lookupStatus: "found",
+            data: serializeSettingsForPartner(
+              settingsMap,
+              scopedPartner,
+              session.email
+            ),
+          });
         }
         return NextResponse.json({
           lookupStatus: "found",

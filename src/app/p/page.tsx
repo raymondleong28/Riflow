@@ -715,14 +715,20 @@ function StandalonePartnerPortalContent() {
             </div>
             <div className="divide-y divide-slate-100">
               {scopedAssets.map((a) => {
-                let fileUrl = "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
-                let fileName = a.name;
-                try {
-                  const meta = JSON.parse(a.metadataJson || "{}");
-                  if (meta.fileUrl) fileUrl = meta.fileUrl;
-                  if (meta.fileName) fileName = meta.fileName;
-                } catch {
-                  // fallback
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const assetAny = a as any;
+                let fileUrl =
+                  assetAny.fileUrl ||
+                  "/uploads/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
+                let fileName = assetAny.fileName || a.name;
+                if (a.metadataJson) {
+                  try {
+                    const meta = JSON.parse(a.metadataJson);
+                    if (meta.fileUrl) fileUrl = meta.fileUrl;
+                    if (meta.fileName) fileName = meta.fileName;
+                  } catch {
+                    // fallback
+                  }
                 }
                 return (
                   <div

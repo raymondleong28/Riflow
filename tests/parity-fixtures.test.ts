@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { prisma } from "../src/lib/prisma";
+import {
+  serializeManageItemForPartner,
+  serializeSettingsForPartner,
+} from "../src/lib/partnerSerializer";
 import {
   EBER_COMMISSION_FIXTURE_RULES,
   evaluateRuleForInvoice,
@@ -738,11 +744,152 @@ async function runFixtures() {
   assert.equal(jobMeta.day2Sent, true, "Day 2 reminder state must survive restart");
   assert.equal(jobMeta.day5Sent, true, "Day 5 reminder state must survive restart");
   assert.equal(jobMeta.day7TaskCreated, true, "Day 7 task state must survive restart");
+  // Clean up temporary fixture job so manageItems stays clean
+  await prisma.manageItem.delete({ where: { id: persistedJob.id } });
   console.log(
     "✓ Fixture 18 passed (§14.2 Slice 6d): Durable scheduler invitation nurture state (Day 2, Day 5, Day 7 task) persists in DB across restarts"
   );
 
-  console.log("\nALL 18 KNOWN-ANSWER PARITY, §13 & §14 CONTRACT FIXTURES PASSED GREEN!");
+  // Fixture 19 (§15.2 Slice 1): Verify active database is PostgreSQL 16 and prisma/dev.db does not exist
+  const pgVersionRows = await prisma.$queryRawUnsafe<Array<{ version: string }>>(
+    "SELECT version()"
+  );
+  assert.ok(
+    pgVersionRows[0]?.version?.toLowerCase().includes("postgresql"),
+    `Expected PostgreSQL engine, got ${pgVersionRows[0]?.version}`
+  );
+  const sqliteFileExists = fs.existsSync(
+    path.join(process.cwd(), "prisma", "dev.db")
+  );
+  assert.equal(
+    sqliteFileExists,
+    false,
+    "prisma/dev.db must not exist after PostgreSQL cutover"
+  );
+  console.log(
+    `✓ Fixture 19 passed (§15.2 Slice 1): Active database is PostgreSQL (${pgVersionRows[0].version.split(",")[0]}) and prisma/dev.db is absent`
+  );
+
+  // Fixture 20 (§3 Slice 0b & §15.2 Slice 1): PostgreSQL persistence test — create partner, edit it, verify IDs/relationships intact, clean up
+  const tempPartnerId = "prt-pg-persistence-test";
+  await prisma.partner.upsert({
+    where: { id: tempPartnerId },
+    update: {},
+    create: {
+      id: tempPartnerId,
+      name: "Postgres Persistence Verification Partner",
+      programId: "prog-strategic",
+      programName: "R-Cloud Strategic Solution Partners",
+      qualifyingLevel: "Gold Tier",
+      country: "Singapore",
+      currency: "SGD",
+    },
+  });
+  await prisma.partner.update({
+    where: { id: tempPartnerId },
+    data: {
+      qualifyingLevel: "Platinum Elite",
+      contactEmail: "pg-verify@partner.example.com",
+    },
+  });
+  const reloadedPgPartner = await prisma.partner.findUnique({
+    where: { id: tempPartnerId },
+    include: { program: true },
+  });
+  assert.equal(reloadedPgPartner?.id, tempPartnerId);
+  assert.equal(reloadedPgPartner?.qualifyingLevel, "Platinum Elite");
+  assert.equal(reloadedPgPartner?.contactEmail, "pg-verify@partner.example.com");
+  assert.equal(reloadedPgPartner?.program?.id, "prog-strategic");
+  await prisma.partner.delete({ where: { id: tempPartnerId } });
+  console.log(
+    "✓ Fixture 20 passed (§3 Slice 0b / §15.2 Slice 1): PostgreSQL create, edit, and foreign-key relationship persistence verified"
+  );
+
+  // Fixture 21 (§15.2 Slice 2 & Slice 3): Partner allowlist serializers strip metadataJson, awardedPartners, email subjects, other partner names, and coworker-only settings
+  const certWithOtherPartners = {
+    id: "cert-test",
+    category: "certifications",
+    name: "R-PRM Certified Sales Professional (RCSP)",
+    subtitle: "Validity period: 24 Months · 14 Certified Partners",
+    status: "Active",
+    metadataJson: JSON.stringify({
+      validityMonths: 24,
+      passingScore: "85%",
+      awardedPartners: [
+        "Apex Cloud Solutions Pte Ltd",
+        "NovaBridge Digital Systems",
+        "Synthetix POS & Retail Tech",
+      ],
+    }),
+  };
+  const serializedCert = serializeManageItemForPartner(
+    certWithOtherPartners,
+    "Apex Cloud Solutions Pte Ltd",
+    "R-Cloud Strategic Solution Partners"
+  );
+  const certJsonStr = JSON.stringify(serializedCert);
+  assert.equal("metadataJson" in serializedCert, false, "Partner certification must not contain metadataJson");
+  assert.equal(certJsonStr.includes("awardedPartners"), false, "Partner certification must not contain awardedPartners");
+  assert.equal(certJsonStr.includes("NovaBridge"), false, "Partner certification must not leak NovaBridge");
+  assert.equal(certJsonStr.includes("Synthetix"), false, "Partner certification must not leak Synthetix");
+  assert.equal(
+    (serializedCert as { heldByCurrentPartner?: boolean }).heldByCurrentPartner,
+    true,
+    "Partner certification must indicate heldByCurrentPartner=true for Apex"
+  );
+
+  const rawSettingsRows = await prisma.appSetting.findMany();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fullSettingsMap: Record<string, any> = {};
+  for (const r of rawSettingsRows) {
+    fullSettingsMap[r.key] = JSON.parse(r.valueJson);
+  }
+  const partnerSettings = serializeSettingsForPartner(
+    fullSettingsMap,
+    strategicPartner,
+    "jordan.lee@apexcloud.example.com"
+  );
+  const partnerAcctKeys = Object.keys(partnerSettings.account_settings);
+  assert.deepEqual(
+    partnerAcctKeys.sort(),
+    [
+      "accountName",
+      "logo",
+      "mainCurrency",
+      "payoutProviders",
+      "portalDomain",
+      "primaryColor",
+      "selfInvoicingEnabled",
+    ],
+    `Partner account_settings allowlist must contain only portal branding/payout fields, got ${JSON.stringify(
+      partnerAcctKeys
+    )}`
+  );
+  const partnerSettingsStr = JSON.stringify(partnerSettings);
+  for (const forbiddenKey of [
+    "spEntityId",
+    "spCallbackUrl",
+    "requireMfaCoworkers",
+    "requireMfaPartners",
+    "validationStrategy",
+    "dealValidationStrategy",
+    "conflictDetection",
+    "dealConflictDetection",
+    "dealExpirationDays",
+    "autoPayoutSchedule",
+    "autoPayoutThresholdSgd",
+  ]) {
+    assert.equal(
+      partnerSettingsStr.includes(forbiddenKey),
+      false,
+      `Partner settings must not expose coworker-only field ${forbiddenKey}`
+    );
+  }
+  console.log(
+    "✓ Fixture 21 passed (§15.2 Slice 2 & Slice 3): Partner allowlist serializers strip metadataJson, awardedPartners, other partner names, and coworker-only settings"
+  );
+
+  console.log("\nALL 21 KNOWN-ANSWER PARITY, §13, §14 & §15 POSTGRES CONTRACT FIXTURES PASSED GREEN!");
   await prisma.$disconnect();
 }
 

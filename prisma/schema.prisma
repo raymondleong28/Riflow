@@ -2,11 +2,9 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Locally uses SQLite (file:./dev.db).
-// To migrate to production hosting (Vercel / Railway / Supabase / Neon),
-// change provider to "postgresql" and point DATABASE_URL to your Postgres instance.
+// Uses local PostgreSQL 16 (same relational engine as production — §3 Slice 0b, §13.3, §14.2 Slice 3, §15.2 Slice 1).
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
