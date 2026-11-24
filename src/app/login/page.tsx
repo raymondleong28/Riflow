@@ -11,11 +11,23 @@ export default function CoworkerLoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showDevLogins, setShowDevLogins] = useState(false);
+  const [branding, setBranding] = useState({
+    accountName: "R-PRM",
+    logoText: "R",
+    primaryColor: "#2563EB",
+  });
 
   React.useEffect(() => {
     fetch("/api/auth")
       .then((r) => r.json())
-      .then((d) => setShowDevLogins(Boolean(d?.showDevLogins)))
+      .then((d) => {
+        if (d?.needsSetup) {
+          window.location.href = "/setup";
+          return;
+        }
+        setShowDevLogins(Boolean(d?.showDevLogins));
+        if (d?.branding) setBranding(d.branding);
+      })
       .catch(() => setShowDevLogins(false));
   }, []);
 
@@ -51,12 +63,15 @@ export default function CoworkerLoginPage() {
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-md w-full p-8 shadow-2xl space-y-5 text-xs">
         <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-600 text-white font-extrabold text-xl flex items-center justify-center">
-            R
+          <div
+            style={{ backgroundColor: branding.primaryColor || "#2563EB" }}
+            className="w-10 h-10 rounded-xl text-white font-extrabold text-xl flex items-center justify-center"
+          >
+            {branding.logoText || "R"}
           </div>
           <div>
             <h1 className="text-lg font-extrabold text-slate-900">
-              Sign In to R-PRM
+              Sign In to {branding.accountName || "R-PRM"}
             </h1>
             <p className="text-slate-500">
               Internal Channel &amp; Partnership Workspace

@@ -79,16 +79,35 @@ export async function middleware(req: NextRequest) {
   if (
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico" ||
+    pathname === "/setup" ||
+    pathname.startsWith("/setup/") ||
     pathname === "/login" ||
     pathname === "/p/login" ||
     pathname === "/p/activate" ||
     pathname.startsWith("/p/activate/") ||
     pathname.startsWith("/forms/") ||
+    pathname.startsWith("/api/setup") ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/public-forms") ||
     pathname.startsWith("/api/health") ||
     pathname.startsWith("/api/scheduler")
   ) {
+    // §3.2 Fresh start: When no admin exists, /login and /p/login redirect to /setup
+    if (pathname === "/login" || pathname === "/p/login") {
+      try {
+        const setupRes = await fetch(`${baseUrl}/api/setup`, {
+          cache: "no-store",
+        });
+        if (setupRes.ok) {
+          const setupJson = await setupRes.json();
+          if (setupJson?.needsSetup) {
+            return NextResponse.redirect(`${baseUrl}/setup`);
+          }
+        }
+      } catch {
+        // Proceed if internal check cannot complete during cold start
+      }
+    }
     return NextResponse.next();
   }
 
@@ -118,13 +137,39 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith("/portal/")
   ) {
     if (!session) {
+      try {
+        const setupRes = await fetch(`${baseUrl}/api/setup`, {
+          cache: "no-store",
+        });
+        if (setupRes.ok) {
+          const setupJson = await setupRes.json();
+          if (setupJson?.needsSetup) {
+            return NextResponse.redirect(`${baseUrl}/setup`);
+          }
+        }
+      } catch {
+        // ignore
+      }
       return NextResponse.redirect(`${baseUrl}/p/login`);
     }
     return NextResponse.next();
   }
 
-  // Admin pages: require authenticated Coworker session
+  // Admin pages: require authenticated Coworker session (or redirect to /setup if fresh install)
   if (!session) {
+    try {
+      const setupRes = await fetch(`${baseUrl}/api/setup`, {
+        cache: "no-store",
+      });
+      if (setupRes.ok) {
+        const setupJson = await setupRes.json();
+        if (setupJson?.needsSetup) {
+          return NextResponse.redirect(`${baseUrl}/setup`);
+        }
+      }
+    } catch {
+      // ignore
+    }
     return NextResponse.redirect(`${baseUrl}/login`);
   }
   if (session.identityType === "partner") {

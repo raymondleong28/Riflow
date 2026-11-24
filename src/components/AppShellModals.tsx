@@ -202,40 +202,6 @@ export function AppShellDrawersAndModals({
         </div>
       )}
 
-      {/* Refer Modal */}
-      {openMenu === "refer" && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold text-lg text-slate-900">Refer R-PRM</h3>
-              <button onClick={closeMenus}>
-                <X className="w-5 h-5 text-slate-400" />
-              </button>
-            </div>
-            <p className="text-sm text-slate-600 mb-4">
-              Invite another channel leader to R-PRM and earn SGD 500 in platform
-              credits when they launch their partner portal.
-            </p>
-            <div className="flex items-center space-x-2">
-              <input
-                readOnly
-                value="https://r-prm.example.com/invite?ref=r-cloud-alex"
-                className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-lg bg-slate-50"
-              />
-              <button
-                onClick={() => {
-                  showToast("Referral link copied to clipboard!");
-                  closeMenus();
-                }}
-                className="px-4 py-2 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700"
-              >
-                Copy Link
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* GLOBAL MODAL 1: Add a New Partner */}
       {globalModal === "add_partner" && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">

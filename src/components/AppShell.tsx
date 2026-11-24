@@ -43,6 +43,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     programs,
     partners,
     manageItems,
+    settings,
+    session,
     mutate,
     toast,
     globalModal,
@@ -50,8 +52,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     showToast,
   } = usePrm();
 
+  const acct = settings?.account_settings || {};
+  const brandName = acct.accountName || "R-PRM";
+  const brandLogoText =
+    acct.logoText || (brandName.charAt(0) || "R").toUpperCase();
+  const brandColor = acct.primaryColor || "#2563EB";
+  const userName = session?.name || "Administrator";
+  const userFirstName = userName.split(" ")[0] || userName;
+  const userInitial = (userFirstName.charAt(0) || "A").toUpperCase();
+
   const [openMenu, setOpenMenu] = useState<
-    "partners" | "mapping" | "more" | "user" | "whatsnew" | "notifications" | "outbox" | "refer" | "beacon" | null
+    "partners" | "mapping" | "more" | "user" | "whatsnew" | "notifications" | "outbox" | "beacon" | null
   >(null);
 
   const sentEmails = manageItems.filter((m) => m.category === "sent_emails");
@@ -170,6 +181,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // D12 Fix (§4.4 & §4.6): Partner portal (/p/*), public forms (/forms/*), and login screens (/login)
   // have their own dedicated layouts and NEVER display the Admin navigation header!
   const isStandaloneSurface =
+    pathname === "/setup" ||
+    pathname.startsWith("/setup/") ||
     pathname === "/login" ||
     pathname === "/p" ||
     pathname.startsWith("/p/") ||
@@ -196,18 +209,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Top Global Navigation Bar (Blue Theme + "R" Emblem Logo) */}
       <header className="sticky top-0 z-40 h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center space-x-1">
-          {/* "R" Emblem Logo */}
+          {/* Brand Emblem Logo */}
           <Link
             href="/dashboard"
             onClick={closeMenus}
             className="flex items-center space-x-2.5 mr-4 group"
           >
-            <div className="w-9 h-9 rounded-lg bg-blue-600 group-hover:bg-blue-700 transition-colors flex items-center justify-center text-white font-extrabold text-xl shadow-sm">
-              R
+            <div
+              style={{ backgroundColor: brandColor }}
+              className="w-9 h-9 rounded-lg transition-colors flex items-center justify-center text-white font-extrabold text-xl shadow-sm"
+            >
+              {brandLogoText}
             </div>
             <div className="hidden sm:flex flex-col">
               <span className="font-bold text-slate-900 text-sm leading-tight tracking-tight">
-                R-PRM
+                {brandName}
               </span>
               <span className="text-[10px] font-medium text-blue-600 uppercase tracking-wider">
                 Partner Cloud
@@ -580,19 +596,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <HelpCircle className="w-4 h-4" />
           </Link>
 
-          {/* User / Workspace Menu (Alex · R-Cloud) */}
+          {/* User / Workspace Menu */}
           <div className="relative">
             <button
               onClick={() => setOpenMenu(openMenu === "user" ? null : "user")}
               className="pl-2.5 pr-2 py-1.5 rounded-md border border-slate-200 hover:bg-slate-50 flex items-center space-x-2 text-xs font-medium text-slate-800"
             >
-              <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs">
-                A
+              <div
+                style={{ backgroundColor: brandColor }}
+                className="w-6 h-6 rounded-full text-white flex items-center justify-center font-bold text-xs"
+              >
+                {userInitial}
               </div>
               <div className="hidden sm:flex items-center space-x-1">
-                <span className="font-semibold">Alex</span>
+                <span className="font-semibold">{userFirstName}</span>
                 <span className="text-slate-400">·</span>
-                <span className="text-blue-700 font-medium">R-Cloud</span>
+                <span className="text-blue-700 font-medium">{brandName}</span>
               </div>
               <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
             </button>
@@ -600,9 +619,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {openMenu === "user" && (
               <div className="absolute right-0 mt-1.5 w-56 bg-white rounded-lg shadow-lg border border-slate-200 py-1.5 z-50">
                 <div className="px-3.5 py-2 border-b border-slate-100">
-                  <p className="text-xs font-bold text-slate-900">Alex Morgan</p>
+                  <p className="text-xs font-bold text-slate-900">{userName}</p>
                   <p className="text-[11px] text-slate-500">
-                    Workspace: R-Cloud Enterprise
+                    Workspace: {brandName}
                   </p>
                 </div>
                 <Link
@@ -621,13 +640,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <UserCog className="w-4 h-4 text-blue-600" />
                   <span>User Preferences</span>
                 </Link>
-                <button
-                  onClick={() => setOpenMenu("refer")}
-                  className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700 text-left"
-                >
-                  <Gift className="w-4 h-4 text-blue-600" />
-                  <span>Refer R-PRM</span>
-                </button>
                 <div className="my-1 border-t border-slate-100" />
                 <button
                   onClick={async () => {

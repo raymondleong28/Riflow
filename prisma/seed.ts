@@ -8,19 +8,38 @@ import { hashPasswordWithRandomSalt } from "../src/lib/authSession";
 
 const prisma = new PrismaClient();
 
-export async function seedDatabase() {
-  // §16.3 G10: Seed refuses to run when NODE_ENV=production!
+export async function seedDatabase(options?: { forceReset?: boolean }) {
+  // §3.2 & §16.3 G10: Demo seed refuses to run when NODE_ENV=production!
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "FAIL_CLOSED: Seed script refuses to run when NODE_ENV=production (§16.3 G10)"
+      "FAIL_CLOSED: Demo seed script refuses to run when NODE_ENV=production"
     );
   }
   const adminPassword = (process.env.SEED_ADMIN_PASSWORD || "").trim();
   const partnerPassword = (process.env.SEED_PARTNER_PASSWORD || "").trim();
   if (!adminPassword || !partnerPassword) {
     throw new Error(
-      "FAIL_CLOSED: SEED_ADMIN_PASSWORD and SEED_PARTNER_PASSWORD must be provided in .env (§16.2 S5)"
+      "FAIL_CLOSED: SEED_ADMIN_PASSWORD and SEED_PARTNER_PASSWORD must be provided in .env"
     );
+  }
+
+  // §3.2 #4: Refuse to run when any non-demo data exists
+  if (!options?.forceReset) {
+    const nonDemoUsers = await prisma.user.count({
+      where: { isTestAccount: false },
+    });
+    const nonDemoPartners = await prisma.partner.count({
+      where: {
+        NOT: {
+          contactEmail: { endsWith: ".example.com" },
+        },
+      },
+    });
+    if (nonDemoUsers > 0 || nonDemoPartners > 0) {
+      throw new Error(
+        `FAIL_CLOSED: Demo seed refuses to run because non-demo data already exists (${nonDemoUsers} non-demo user(s), ${nonDemoPartners} non-demo partner(s)).`
+      );
+    }
   }
 
   // Clear existing data in safe order

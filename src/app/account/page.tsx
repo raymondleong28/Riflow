@@ -26,7 +26,6 @@ const ACCOUNT_CATEGORIES = [
   { id: "payouts", label: "Payout settings" },
   { id: "properties", label: "Properties" },
   { id: "data", label: "Account data" },
-  { id: "billing", label: "Billing" },
   { id: "integration", label: "Integration" },
   { id: "audit-log", label: "Audit trail" },
 ] as const;
@@ -1065,29 +1064,6 @@ export default function AccountRootPage() {
                   >
                     Reset data
                   </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 11. BILLING */}
-          {activeTab === "billing" && (
-            <div className="space-y-4">
-              <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-2">
-                Billing &amp; Subscription Plan
-              </h2>
-              <div className="p-4 rounded-xl bg-blue-600 text-white flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] uppercase tracking-wider bg-blue-800 px-2 py-0.5 rounded font-bold">
-                    Internal Eber Tool
-                  </span>
-                  <h3 className="text-lg font-extrabold mt-1">
-                    Unlimited (Enterprise Legacy)
-                  </h3>
-                  <p className="text-blue-100">
-                    Unlimited Partners · Unlimited Team Members · Account
-                    Mapping &amp; Custom Domain Included
-                  </p>
                 </div>
               </div>
             </div>

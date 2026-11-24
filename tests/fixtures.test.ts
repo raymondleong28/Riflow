@@ -1198,6 +1198,8 @@ async function runFixtures() {
     role: "Administrator" as const,
     name: "Alex Morgan",
     email: "alex@r-prm.example.com",
+    issuedAt: Date.now(),
+    expiresAt: Date.now() + 86400000,
   };
   const csvDryRunRes = await handleCsvImportMutation(mockAdminSession, {
     objectType: "partners",

@@ -28,6 +28,38 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(info);
   }
 
+  const adminCount = await prisma.user.count({
+    where: {
+      identityType: "coworker",
+      role: "Administrator",
+      status: "Active",
+    },
+  });
+  const needsSetup = adminCount === 0;
+
+  let branding = {
+    accountName: "R-PRM",
+    logoText: "R",
+    primaryColor: "#2563EB",
+    portalDomain: "",
+  };
+  const acctRow = await prisma.appSetting.findUnique({
+    where: { key: "account_settings" },
+  });
+  if (acctRow) {
+    try {
+      const parsed = JSON.parse(acctRow.valueJson);
+      branding = {
+        accountName: parsed.accountName || "R-PRM",
+        logoText: parsed.logoText || "R",
+        primaryColor: parsed.primaryColor || "#2563EB",
+        portalDomain: parsed.portalDomain || "",
+      };
+    } catch {
+      // ignore
+    }
+  }
+
   const showDevLogins =
     process.env.NODE_ENV !== "production" &&
     process.env.SHOW_DEV_LOGINS === "true";
@@ -35,11 +67,17 @@ export async function GET(req: NextRequest) {
   const session = await getActiveServerSession(req);
   if (!session) {
     return NextResponse.json(
-      { authenticated: false, session: null, showDevLogins },
+      { authenticated: false, session: null, showDevLogins, needsSetup, branding },
       { status: 401 }
     );
   }
-  return NextResponse.json({ authenticated: true, session, showDevLogins });
+  return NextResponse.json({
+    authenticated: true,
+    session,
+    showDevLogins,
+    needsSetup,
+    branding,
+  });
 }
 
 export async function POST(req: NextRequest) {

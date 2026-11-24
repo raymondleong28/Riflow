@@ -109,9 +109,16 @@ export default function DashboardPage() {
     trackingLinks,
     manageItems,
     settings,
+    session,
     mutate,
     setGlobalModal,
   } = usePrm();
+
+  const acct = settings?.account_settings || {};
+  const workspaceName = acct.accountName || "R-PRM Workspace";
+  const baseCurrency = acct.mainCurrency || "SGD";
+  const adminFirstName =
+    (session?.name || "Administrator").split(" ")[0] || "Administrator";
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [dealsPeriod, setDealsPeriod] = useState("All time");
@@ -199,9 +206,11 @@ export default function DashboardPage() {
       {/* Dashboard Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Welcome, Alex</h1>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Welcome, {adminFirstName}
+          </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            R-Cloud Enterprise Partner Program Overview · Base Currency: SGD
+            {workspaceName} Overview · Base Currency: {baseCurrency}
           </p>
         </div>
         <div className="flex items-center space-x-2.5">
@@ -464,28 +473,34 @@ export default function DashboardPage() {
               </button>
             </div>
             <div className="divide-y divide-slate-100 text-xs flex-1">
-              {deals.slice(0, 8).map((d) => (
-                <div
-                  key={d.id}
-                  className="py-2.5 flex items-center justify-between gap-2 hover:bg-slate-50 px-2 rounded"
-                >
-                  <div className="min-w-0">
-                    <Link
-                      href={`/deals/${d.id}`}
-                      className="font-semibold text-blue-700 hover:underline truncate block"
-                    >
-                      {d.name}
-                    </Link>
-                    <p className="text-slate-500 truncate">{d.partnerName}</p>
+              {deals.length === 0 ? (
+                <p className="py-6 text-center text-slate-400">
+                  No deals registered yet.
+                </p>
+              ) : (
+                deals.slice(0, 8).map((d) => (
+                  <div
+                    key={d.id}
+                    className="py-2.5 flex items-center justify-between gap-2 hover:bg-slate-50 px-2 rounded"
+                  >
+                    <div className="min-w-0">
+                      <Link
+                        href={`/deals/${d.id}`}
+                        className="font-semibold text-blue-700 hover:underline truncate block"
+                      >
+                        {d.name}
+                      </Link>
+                      <p className="text-slate-500 truncate">{d.partnerName}</p>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <span className="font-bold text-slate-900">
+                        {d.currency} {d.amount.toLocaleString()}
+                      </span>
+                      <StatusBadge status={d.status} />
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-2 shrink-0">
-                    <span className="font-bold text-slate-900">
-                      {d.currency} {d.amount.toLocaleString()}
-                    </span>
-                    <StatusBadge status={d.status} />
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}
@@ -512,25 +527,31 @@ export default function DashboardPage() {
               </button>
             </div>
             <div className="divide-y divide-slate-100 text-xs flex-1">
-              {leads.slice(0, 8).map((l) => (
-                <div
-                  key={l.id}
-                  className="py-2.5 flex items-center justify-between gap-2 hover:bg-slate-50 px-2 rounded"
-                >
-                  <div className="min-w-0">
-                    <Link
-                      href={`/leads/${l.id}`}
-                      className="font-semibold text-blue-700 hover:underline block truncate"
-                    >
-                      {l.firstName} {l.lastName} · {l.company}
-                    </Link>
-                    <p className="text-slate-500 truncate">
-                      {l.sourcePartnerName} · Assigned {l.assignedDate}
-                    </p>
+              {leads.length === 0 ? (
+                <p className="py-6 text-center text-slate-400">
+                  No leads submitted yet.
+                </p>
+              ) : (
+                leads.slice(0, 8).map((l) => (
+                  <div
+                    key={l.id}
+                    className="py-2.5 flex items-center justify-between gap-2 hover:bg-slate-50 px-2 rounded"
+                  >
+                    <div className="min-w-0">
+                      <Link
+                        href={`/leads/${l.id}`}
+                        className="font-semibold text-blue-700 hover:underline block truncate"
+                      >
+                        {l.firstName} {l.lastName} · {l.company}
+                      </Link>
+                      <p className="text-slate-500 truncate">
+                        {l.sourcePartnerName} · Assigned {l.assignedDate}
+                      </p>
+                    </div>
+                    <StatusBadge status={l.status} />
                   </div>
-                  <StatusBadge status={l.status} />
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}
@@ -557,32 +578,38 @@ export default function DashboardPage() {
               </Link>
             </div>
             <div className="divide-y divide-slate-100 text-xs">
-              {topSalesPartners.map((p, idx) => (
-                <div
-                  key={p.id}
-                  className="py-2.5 flex items-center justify-between hover:bg-slate-50 px-2 rounded"
-                >
-                  <div className="flex items-center space-x-2.5">
-                    <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-[11px]">
-                      {idx + 1}
-                    </span>
-                    <Link
-                      href={`/partners/${p.id}`}
-                      className="font-semibold text-slate-900 hover:text-blue-700"
-                    >
-                      {p.name}
-                    </Link>
+              {topSalesPartners.length === 0 ? (
+                <p className="py-6 text-center text-slate-400">
+                  No partners added yet.
+                </p>
+              ) : (
+                topSalesPartners.map((p, idx) => (
+                  <div
+                    key={p.id}
+                    className="py-2.5 flex items-center justify-between hover:bg-slate-50 px-2 rounded"
+                  >
+                    <div className="flex items-center space-x-2.5">
+                      <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-[11px]">
+                        {idx + 1}
+                      </span>
+                      <Link
+                        href={`/partners/${p.id}`}
+                        className="font-semibold text-slate-900 hover:text-blue-700"
+                      >
+                        {p.name}
+                      </Link>
+                    </div>
+                    <div className="flex items-center space-x-3">
+                      <span className="text-slate-500">
+                        {p.computedWonCount} won deals ({p.computedWinRate}% win rate)
+                      </span>
+                      <span className="font-bold text-blue-700">
+                        SGD {p.computedWonAmountSgd.toLocaleString()}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-3">
-                    <span className="text-slate-500">
-                      {p.computedWonCount} won deals ({p.computedWinRate}% win rate)
-                    </span>
-                    <span className="font-bold text-blue-700">
-                      SGD {p.computedWonAmountSgd.toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}
@@ -623,7 +650,7 @@ export default function DashboardPage() {
               <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
                 <p className="text-slate-500">Assigned deals</p>
                 <p className="text-2xl font-extrabold text-slate-900 mt-1">
-                  {deals.length + 14}
+                  {deals.filter((d) => Boolean(d.assignedContact)).length}
                 </p>
               </div>
               <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200">

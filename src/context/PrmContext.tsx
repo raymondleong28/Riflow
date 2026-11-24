@@ -130,8 +130,10 @@ export function PrmProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refresh = useCallback(async () => {
-    // Skip authenticated resource fetch on public login or public intake form routes
+    // Skip authenticated resource fetch on public login, setup, or public intake form routes
     if (
+      pathname === "/setup" ||
+      pathname.startsWith("/setup/") ||
       pathname === "/login" ||
       pathname === "/p/login" ||
       pathname.startsWith("/forms/")
@@ -143,10 +145,19 @@ export function PrmProvider({ children }: { children: React.ReactNode }) {
     try {
       const authRes = await fetch("/api/auth", { cache: "no-store" });
       if (!authRes.ok) {
+        const authErrJson = await authRes.json().catch(() => ({}));
+        if (authErrJson?.needsSetup && typeof window !== "undefined") {
+          window.location.href = "/setup";
+          return;
+        }
         setLoading(false);
         return;
       }
       const authJson = await authRes.json();
+      if (authJson?.needsSetup && typeof window !== "undefined") {
+        window.location.href = "/setup";
+        return;
+      }
       const session = authJson.session;
       const isPartner = session?.identityType === "partner";
 
