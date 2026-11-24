@@ -204,133 +204,204 @@ export default function PartnerOnboardingPage() {
         </div>
       </div>
 
-      {/* 6 Onboarding Stage Action Types Bar (Fixes D8) */}
-      <div className="bg-white rounded-xl border border-blue-200 p-4 shadow-sm space-y-3 text-xs">
-        <div className="flex items-center justify-between">
-          <span className="font-bold text-slate-900">
-            Configured Stage Actions ({KIFLO_6_ACTION_TYPES.length} Built-in
-            Action Types + {stageActions.length} Custom Actions)
-          </span>
-          <button
-            onClick={() => setActionModalOpen(true)}
-            className="text-blue-600 hover:underline font-semibold"
-          >
-            + Configure New Action
-          </button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
-          {KIFLO_6_ACTION_TYPES.map((act) => (
-            <div
-              key={act.type}
-              onClick={() => {
-                setActionType(act.type);
-                setActionTitle(act.defaultTitle);
-                setRequireValidation(act.requiresValidation);
-                setActionModalOpen(true);
-              }}
-              className="p-2.5 rounded-lg border border-slate-200 hover:border-blue-500 bg-slate-50 cursor-pointer space-y-1"
-            >
-              <span className="text-[10px] font-bold text-blue-700 uppercase block">
-                {act.label}
-              </span>
-              <p className="font-semibold text-slate-800 line-clamp-2">
-                {act.defaultTitle}
-              </p>
-              {act.requiresValidation && (
-                <span className="inline-block text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-semibold">
-                  Admin Validation
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {stageActions.length > 0 && (
-          <div className="pt-2 border-t border-slate-100 space-y-1.5">
-            {stageActions.map((sa) => (
-              <div
-                key={sa.id}
-                className="p-2.5 rounded-lg bg-blue-50/50 border border-blue-100 flex items-center justify-between"
-              >
-                <div>
-                  <span className="font-bold text-slate-900">{sa.name}</span>
-                  <span className="text-slate-500 ml-2">{sa.subtitle}</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <StatusBadge status={sa.status} />
-                  {sa.status === "Pending Validation" && (
-                    <button
-                      onClick={() =>
-                        mutate(
-                          "TOGGLE_MANAGE_ITEM_STATUS",
-                          { id: sa.id, status: "Validated" },
-                          `Admin validated onboarding action "${sa.name}"!`
-                        )
-                      }
-                      className="px-2.5 py-1 rounded bg-emerald-600 text-white font-semibold text-[11px] flex items-center space-x-1"
-                    >
-                      <ShieldCheck className="w-3 h-3" />
-                      <span>Approve Validation</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Onboarding Kanban Board */}
+      {/* Onboarding Kanban Board — Actions Attached Per Individual Stage */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {ONBOARDING_STAGES.map((stage, idx) => {
           const items = partners.filter((p) => p.onboardingStage === stage);
           const nextStage = ONBOARDING_STAGES[idx + 1];
+          const actionsForThisStage = stageActions.filter((sa) => {
+            try {
+              const meta = sa.metadataJson ? JSON.parse(sa.metadataJson) : sa.metadata;
+              if (meta?.stage) return meta.stage === stage;
+            } catch {}
+            return (sa.subtitle || "").includes(`Stage: ${stage}`);
+          });
+
+          // Default stage-level action examples per stage so each stage shows its attached actions
+          const defaultStageActionMap: Record<
+            string,
+            Array<{ type: string; label: string; title: string; requiresValidation: boolean }>
+          > = {
+            "Kickoff Welcome Call": [
+              {
+                type: "book_meeting",
+                label: "Book meeting",
+                title: "Book Kickoff Alignment Call via Calendly / HubSpot",
+                requiresValidation: false,
+              },
+              {
+                type: "view_asset",
+                label: "View asset",
+                title: "Review 2026 Enterprise Partner Pitch Deck",
+                requiresValidation: false,
+              },
+            ],
+            "Book a Demo Account Training": [
+              {
+                type: "read_article",
+                label: "Read article",
+                title: "Read 'How to Register & Protect an Enterprise Deal'",
+                requiresValidation: false,
+              },
+              {
+                type: "provide_information",
+                label: "Provide information",
+                title: "Complete Regional Territory & Technical Headcount Form",
+                requiresValidation: true,
+              },
+            ],
+            "Technical Certification": [
+              {
+                type: "upload_document",
+                label: "Upload document",
+                title: "Upload Counter-Signed Master Reseller Agreement (PDF)",
+                requiresValidation: true,
+              },
+            ],
+            Completed: [
+              {
+                type: "self_invoicing_opt_in",
+                label: "Opt-in/out from self-invoicing",
+                title: "Confirm Automated Self-Invoicing & GST/Tax Billing Preference",
+                requiresValidation: false,
+              },
+            ],
+          };
+          const builtInStageActions = defaultStageActionMap[stage] || [];
+
           return (
             <div
               key={stage}
-              className="bg-slate-100/80 rounded-xl border border-slate-200 p-4 space-y-3"
+              className="bg-slate-100/80 rounded-xl border border-slate-200 p-4 space-y-3 flex flex-col justify-between"
             >
-              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-                <span className="font-bold text-xs text-slate-900">
-                  {stage}
-                </span>
-                <span className="px-2 py-0.5 text-xs font-bold bg-blue-100 text-blue-700 rounded-full">
-                  {items.length}
-                </span>
-              </div>
               <div className="space-y-3">
-                {items.map((p) => (
-                  <div
-                    key={p.id}
-                    className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm space-y-2 text-xs"
-                  >
-                    <Link
-                      href={`/partners/${p.id}`}
-                      className="font-bold text-blue-700 hover:underline block"
+                <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                  <span className="font-bold text-xs text-slate-900">
+                    {stage}
+                  </span>
+                  <span className="px-2 py-0.5 text-xs font-bold bg-blue-100 text-blue-700 rounded-full">
+                    {items.length}
+                  </span>
+                </div>
+
+                {/* Stage-Scoped Actions Panel */}
+                <div className="bg-white rounded-xl border border-blue-200 p-3 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-[11px] text-blue-900 uppercase tracking-wider">
+                      Stage Actions ({builtInStageActions.length + actionsForThisStage.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionStage(stage);
+                        setActionModalOpen(true);
+                      }}
+                      className="text-blue-600 hover:underline font-semibold text-[11px] flex items-center space-x-0.5"
                     >
-                      {p.name}
-                    </Link>
-                    <p className="text-slate-500">
-                      {p.programName} · {p.qualifyingLevel}
-                    </p>
-                    <div className="text-[11px] text-emerald-700 flex items-center space-x-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Stage actions tracked in Portal</span>
-                    </div>
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                      <StatusBadge status={p.onboardingStatus} />
-                      {nextStage && (
-                        <button
-                          onClick={() => moveStage(p.id, nextStage)}
-                          className="text-blue-600 hover:text-blue-800 font-semibold flex items-center space-x-1"
-                        >
-                          <span>Advance</span>
-                          <ArrowRight className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
+                      <Plus className="w-3 h-3" />
+                      <span>Add Action</span>
+                    </button>
                   </div>
-                ))}
+
+                  <div className="space-y-1.5">
+                    {builtInStageActions.map((act) => (
+                      <div
+                        key={act.type + act.title}
+                        onClick={() => {
+                          setActionStage(stage);
+                          setActionType(act.type);
+                          setActionTitle(act.title);
+                          setRequireValidation(act.requiresValidation);
+                          setActionModalOpen(true);
+                        }}
+                        className="p-2 rounded-lg border border-slate-200 hover:border-blue-400 bg-slate-50 cursor-pointer space-y-0.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-blue-700 uppercase">
+                            {act.label}
+                          </span>
+                          {act.requiresValidation && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold">
+                              Requires Validation
+                            </span>
+                          )}
+                        </div>
+                        <p className="font-medium text-slate-800 text-[11px]">
+                          {act.title}
+                        </p>
+                      </div>
+                    ))}
+
+                    {actionsForThisStage.map((sa) => (
+                      <div
+                        key={sa.id}
+                        className="p-2 rounded-lg bg-blue-50/60 border border-blue-200 space-y-1"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900 text-[11px]">
+                            {sa.name}
+                          </span>
+                          <StatusBadge status={sa.status} />
+                        </div>
+                        <p className="text-[10px] text-slate-500">{sa.subtitle}</p>
+                        {sa.status === "Pending Validation" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              mutate(
+                                "TOGGLE_MANAGE_ITEM_STATUS",
+                                { id: sa.id, status: "Validated" },
+                                `Admin validated onboarding action "${sa.name}"!`
+                              )
+                            }
+                            className="w-full mt-1 px-2 py-1 rounded bg-emerald-600 text-white font-semibold text-[10px] flex items-center justify-center space-x-1"
+                          >
+                            <ShieldCheck className="w-3 h-3" />
+                            <span>Approve Validation</span>
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Partner Cards in this Stage */}
+                <div className="space-y-2.5">
+                  {items.map((p) => (
+                    <div
+                      key={p.id}
+                      className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm space-y-2 text-xs"
+                    >
+                      <Link
+                        href={`/partners/${p.id}`}
+                        className="font-bold text-blue-700 hover:underline block"
+                      >
+                        {p.name}
+                      </Link>
+                      <p className="text-slate-500">
+                        {p.programName} · {p.qualifyingLevel}
+                      </p>
+                      <div className="text-[11px] text-emerald-700 flex items-center space-x-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>
+                          {builtInStageActions.length + actionsForThisStage.length} stage actions assigned
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                        <StatusBadge status={p.onboardingStatus} />
+                        {nextStage && (
+                          <button
+                            onClick={() => moveStage(p.id, nextStage)}
+                            className="text-blue-600 hover:text-blue-800 font-semibold flex items-center space-x-1"
+                          >
+                            <span>Advance</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           );

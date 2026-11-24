@@ -313,8 +313,7 @@ export default function AccountRootPage() {
                 <div className="flex items-center space-x-2">
                   <Shield className="w-4 h-4 text-blue-600" />
                   <h2 className="text-base font-bold text-slate-900">
-                    Security — Authentication, MFA &amp; Single Sign-On (SAML
-                    2.0)
+                    Security — Authentication, TOTP MFA &amp; Single Sign-On (SAML 2.0)
                   </h2>
                 </div>
                 <div className="flex space-x-2">
@@ -335,17 +334,59 @@ export default function AccountRootPage() {
               <div className="space-y-2">
                 <label className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200">
                   <span className="font-semibold">
-                    Require MFA for my coworkers
+                    Require Authenticator-App MFA (TOTP) for my coworkers
                   </span>
                   <input type="checkbox" defaultChecked />
                 </label>
                 <label className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200">
                   <span className="font-semibold">
-                    Require MFA for partner users
+                    Require Authenticator-App MFA (TOTP) for partner users
                   </span>
                   <input type="checkbox" />
                 </label>
               </div>
+
+              {/* Authenticator App (TOTP) & Recovery Codes Card */}
+              <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-slate-900">
+                      Authenticator App (TOTP RFC 6238) &amp; Recovery Codes
+                    </h3>
+                    <p className="text-slate-600">
+                      Verify 6-digit Time-Based One-Time Passcodes from Google Authenticator, 1Password, or Authy, with one-time emergency recovery codes.
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[10px]">
+                    TOTP Active
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="p-3 rounded-lg bg-white border border-slate-200 space-y-1">
+                    <span className="text-[10px] font-bold uppercase text-slate-500">
+                      Provisioned TOTP Base32 Secret
+                    </span>
+                    <p className="font-mono font-bold text-slate-900 select-all">
+                      JBSWY3DPEHPK3PXP
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Issuer: R-PRM Enterprise · Algorithm: HMAC-SHA1 · 30s step
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-white border border-slate-200 space-y-1">
+                    <span className="text-[10px] font-bold uppercase text-slate-500">
+                      Emergency Recovery Codes (Single-Use)
+                    </span>
+                    <div className="grid grid-cols-2 gap-1 font-mono text-[11px] text-slate-800">
+                      <span>RPRM-8821-904A</span>
+                      <span>RPRM-3319-77BC</span>
+                      <span>RPRM-5502-19DE</span>
+                      <span>RPRM-9140-62FA</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                 <div>
                   <label className="block font-medium text-slate-700 mb-1">
@@ -537,7 +578,7 @@ export default function AccountRootPage() {
             </div>
           )}
 
-          {/* 7. DEAL SETTINGS (Distinct Tab — Fixes D7) */}
+          {/* 7. DEAL SETTINGS (All 9 Kiflo Deal Options) */}
           {activeTab === "deals" && (
             <div className="space-y-5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -548,13 +589,14 @@ export default function AccountRootPage() {
                   onClick={() => setActiveTab("properties")}
                   className="text-blue-600 hover:underline font-semibold"
                 >
-                  Configure Deal properties →
+                  1. Deal properties (Configure Deal properties) →
                 </button>
               </div>
 
+              {/* 2. Deal stages */}
               <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                 <h3 className="font-bold text-sm text-slate-900">
-                  Deal pipeline stages (10 Kiflo Stages including Holding)
+                  2. Deal stages (10 Pipeline Stages including Holding)
                 </h3>
                 <div className="flex flex-wrap gap-1.5">
                   {DEAL_STAGES_10.map((stg, idx) => (
@@ -568,39 +610,95 @@ export default function AccountRootPage() {
                 </div>
               </div>
 
+              {/* 3. Deal cards & 4. Channel-conflict detection for deals */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-slate-900 mb-1">
-                    Deal expiration protection window (days)
-                  </label>
-                  <input
-                    type="number"
-                    defaultValue={90}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
+                <div className="p-4 rounded-xl border border-slate-200 space-y-2">
+                  <h4 className="font-bold text-slate-900">
+                    3. Deal cards (Kanban Card Layout)
+                  </h4>
+                  <p className="text-slate-600">
+                    Visible card properties: Deal Name, Partner Name, Amount &amp; Currency, Probability (%), Expected Close Date, Owner, Conflict Flag.
+                  </p>
                 </div>
-                <div>
-                  <label className="block font-bold text-slate-900 mb-1">
-                    Expiration reminder notification (days before expiry)
+
+                <div className="p-4 rounded-xl border border-slate-200 space-y-2">
+                  <label className="block font-bold text-slate-900">
+                    4. Channel-conflict detection (Duplicate Deal Check)
                   </label>
-                  <input
-                    type="number"
-                    defaultValue={14}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
+                  <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white">
+                    <option>
+                      Warn &amp; flag duplicate Deals across Customer company or contact email domain
+                    </option>
+                    <option>
+                      Block partners from registering a Deal when an active protected Deal exists
+                    </option>
+                    <option>Allow duplicate deal registrations (No conflict check)</option>
+                  </select>
                 </div>
-                <div>
+              </div>
+
+              {/* 5. Deal expiration, 8. Validation strategy, 9. Acknowledge deal registrations */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-xl border border-slate-200 space-y-2">
+                  <label className="block font-bold text-slate-900">
+                    5. Deal expiration protection window (days) &amp; reminder
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-[11px] text-slate-500 block mb-0.5">
+                        Protection days
+                      </span>
+                      <input
+                        type="number"
+                        defaultValue={90}
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[11px] text-slate-500 block mb-0.5">
+                        Reminder days before
+                      </span>
+                      <input
+                        type="number"
+                        defaultValue={14}
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl border border-slate-200 space-y-2">
+                  <label className="block font-bold text-slate-900">
+                    6. Deal resubmission &amp; 7. Associate customers automatically
+                  </label>
+                  <label className="flex items-center space-x-2 pt-1">
+                    <input type="checkbox" defaultChecked />
+                    <span className="font-medium text-slate-800">
+                      Deal resubmission — Allow partners to resubmit expired or refused deals
+                    </span>
+                  </label>
+                  <label className="flex items-center space-x-2">
+                    <input type="checkbox" defaultChecked />
+                    <span className="font-medium text-slate-800">
+                      Associate customers automatically — Link or create Customer when Deal closes won
+                    </span>
+                  </label>
+                </div>
+
+                <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <label className="block font-bold text-slate-900 mb-1">
-                    Deal validation strategy
+                    8. Validation strategy
                   </label>
                   <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white">
                     <option>Anyone (Partner Owner or Administrator)</option>
-                    <option>Partner Account Manager only</option>
+                    <option>Dedicated Partner Owner only</option>
+                    <option>Workspace Administrators only</option>
                   </select>
                 </div>
-                <div>
+
+                <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <label className="block font-bold text-slate-900 mb-1">
-                    Acknowledge deal registrations (Email Template)
+                    9. Acknowledge deal registrations (Email Template)
                   </label>
                   <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white">
                     {emailTemplates.map((t) => (
@@ -610,22 +708,6 @@ export default function AccountRootPage() {
                     ))}
                   </select>
                 </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" defaultChecked />
-                  <span className="font-medium text-slate-800">
-                    Allow deal resubmission after expiration or refusal
-                  </span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" defaultChecked />
-                  <span className="font-medium text-slate-800">
-                    Associate customers automatically when Deal moves to Closed
-                    Won
-                  </span>
-                </label>
               </div>
 
               <button
@@ -816,10 +898,10 @@ export default function AccountRootPage() {
                   <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
                   <div>
                     <p className="font-bold text-amber-900">
-                      Danger Zone — Protected Data Reset (§1.4 Data Safety)
+                      Danger Zone — Protected Data Reset
                     </p>
                     <p className="text-amber-800">
-                      Per DATA-SAFETY.md, destructive resets are disabled by
+                      Destructive resets are disabled by
                       default and require explicit owner approval and typing{" "}
                       <code>RESET</code> below.
                     </p>
@@ -836,7 +918,7 @@ export default function AccountRootPage() {
                     disabled={resetConfirmationText !== "RESET"}
                     onClick={() => {
                       showToast(
-                        "Protected mode: Ask Ray in chat before running a destructive reset (§1.4)."
+                        "Protected mode: Ask the workspace owner before running a destructive reset."
                       );
                       setResetConfirmationText("");
                     }}

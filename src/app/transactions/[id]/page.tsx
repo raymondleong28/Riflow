@@ -70,7 +70,7 @@ export default function TransactionDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-2.5 h-fit">
           <h3 className="font-bold text-sm text-slate-900 border-b border-slate-100 pb-2">
-            Transaction &amp; Dated FX Details (§4.1.5)
+            Transaction &amp; Dated FX Details
           </h3>
           <div className="grid grid-cols-2 gap-y-2">
             <span className="text-slate-500">Original Amount</span>

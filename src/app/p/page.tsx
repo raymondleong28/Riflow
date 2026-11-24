@@ -1,20 +1,22 @@
 "use client";
 
 import React, { useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { StatusBadge } from "@/components/SharedEngines";
-import { canPartnerAccessAsset } from "@/lib/prmEngine";
+import {
+  canPartnerAccessAsset,
+  getPartnerLevelRules,
+  getPartnerLeadFormToken,
+} from "@/lib/prmEngine";
 import {
   Award,
   Download,
   Paperclip,
-  Plus,
   Briefcase,
   Users,
   Gift,
-  FolderOpen,
   ExternalLink,
   ShieldAlert,
   LogOut,
@@ -37,12 +39,7 @@ const PORTAL_NAV = [
 
 function StandalonePartnerPortalContent() {
   const searchParams = useSearchParams();
-  const initialPartnerId = searchParams.get("partnerId") || "prt-1";
-  const initialRole =
-    (searchParams.get("role") as "Manager" | "SalesRep" | "Stakeholder") ||
-    "Manager";
-  const isImpersonating = searchParams.get("impersonate") === "true";
-
+  const router = useRouter();
   const {
     partners,
     programs,
@@ -52,23 +49,38 @@ function StandalonePartnerPortalContent() {
     payouts,
     manageItems,
     teamMembers,
+    session,
     mutate,
-    showToast,
   } = usePrm();
 
-  const [selectedPartnerId] = useState(initialPartnerId);
-  const [role, setRole] = useState<"Manager" | "SalesRep" | "Stakeholder">(
-    initialRole
-  );
   const [activeNav, setActiveNav] =
     useState<(typeof PORTAL_NAV)[number]>("Home");
 
+  // Determine partner strictly from server session (or impersonated partner)
+  const targetPartnerId =
+    session?.identityType === "partner"
+      ? session.partnerId
+      : session?.impersonatingPartnerId ||
+        searchParams.get("partnerId") ||
+        "prt-1";
+
   const partner =
-    partners.find((p) => p.id === selectedPartnerId) || partners[0];
+    partners.find((p) => p.id === targetPartnerId) || partners[0];
   const program =
     programs.find(
       (pr) => pr.id === partner?.programId || pr.name === partner?.programName
     ) || programs[0];
+
+  const role: "Manager" | "SalesRep" | "Stakeholder" =
+    session?.identityType === "partner"
+      ? session.role === "Sales Rep"
+        ? "SalesRep"
+        : (session.role as "Manager" | "SalesRep" | "Stakeholder") || "Manager"
+      : "Manager";
+
+  const isImpersonating =
+    session?.identityType === "coworker" ||
+    searchParams.get("impersonate") === "true";
 
   // Form states
   const [dealName, setDealName] = useState("");
@@ -91,7 +103,18 @@ function StandalonePartnerPortalContent() {
     );
   }
 
-  // §4.3 Read program permissions for current partner role
+  // §13.1 Fix: Read the partner's ACTUAL level rules from their Program!
+  // (e.g. Apex on Platinum Elite displays "25% Recurring Deal Commission + 5% Annual Milestone Kickback", never hardcoded 18%!)
+  const levelRules = getPartnerLevelRules(partner, programs);
+  const levelRulesSummary =
+    levelRules.length > 0
+      ? levelRules.map((r) => r.title).join(" + ")
+      : "Standard Tier Commission";
+
+  const personalLeadFormUrl = `/forms/lead/${
+    partner.leadFormToken || getPartnerLeadFormToken(partner.id)
+  }`;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let perms: Record<string, Record<string, any>> = {};
   try {
@@ -105,14 +128,12 @@ function StandalonePartnerPortalContent() {
   const canViewDeals = perms?.Deals?.["Can view deals"]?.[role] ?? true;
   const canRegisterDeals = perms?.Deals?.["Can register deals"]?.[role] ?? true;
 
-  // Ownership-scoped data (§3 Slice 0c & §4.3)
   const myDeals = deals.filter((d) => d.partnerName === partner.name);
   const myLeads = leads.filter((l) => l.sourcePartnerName === partner.name);
   const myRewards = rewards.filter((r) => r.partnerName === partner.name);
   const myPayouts = payouts.filter((p) => p.partnerName === partner.name);
   const myTeam = teamMembers.filter((m) => m.partnerName === partner.name);
 
-  // D6 Fix: Enforce asset scoping so partner ONLY sees assets allowed for their program/level/group!
   const scopedAssets = manageItems.filter(
     (m) => m.category === "assets" && canPartnerAccessAsset(m, partner)
   );
@@ -165,9 +186,26 @@ function StandalonePartnerPortalContent() {
     setLeadEmail("");
   };
 
+  const handleExitImpersonation = async () => {
+    await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "exit_impersonate" }),
+    });
+    router.push(`/partners/${partner.id}`);
+  };
+
+  const handleLogout = async () => {
+    await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "logout" }),
+    });
+    window.location.href = "/p/login";
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
-      {/* §4.4 Visible Impersonation Banner when opened by Admin */}
       {isImpersonating && (
         <div className="bg-amber-500 text-slate-950 px-6 py-2 text-xs font-bold flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -177,16 +215,16 @@ function StandalonePartnerPortalContent() {
               ) — Impersonation session recorded in Audit Log
             </span>
           </div>
-          <Link
-            href={`/partners/${partner.id}`}
+          <button
+            onClick={handleExitImpersonation}
             className="px-3 py-1 rounded bg-slate-900 text-white font-semibold"
           >
             Exit Impersonation →
-          </Link>
+          </button>
         </div>
       )}
 
-      {/* Standalone Partner Portal Header (NO Admin Navigation!) */}
+      {/* Standalone Partner Portal Header */}
       <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between shadow-sm">
         <div className="flex items-center space-x-2">
           <div className="w-8 h-8 rounded-lg bg-blue-600 text-white font-extrabold text-lg flex items-center justify-center">
@@ -223,42 +261,34 @@ function StandalonePartnerPortalContent() {
         </div>
 
         <div className="flex items-center space-x-2 text-xs">
-          <select
-            value={role}
-            onChange={(e) =>
-              setRole(e.target.value as "Manager" | "SalesRep" | "Stakeholder")
-            }
-            className="px-2.5 py-1 border border-slate-300 rounded-lg font-semibold text-blue-700 bg-blue-50"
-            title="Test Partner Role Permissions"
-          >
-            <option value="Manager">Role: Manager</option>
-            <option value="SalesRep">Role: Sales Rep</option>
-            <option value="Stakeholder">Role: Stakeholder</option>
-          </select>
-          <Link
-            href="/p/login"
+          <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-semibold">
+            Role: {role}
+          </span>
+          <button
+            onClick={handleLogout}
             className="p-1.5 rounded text-slate-500 hover:bg-slate-100"
             title="Sign out of Partner Portal"
           >
             <LogOut className="w-4 h-4" />
-          </Link>
+          </button>
         </div>
       </header>
 
       <div className="max-w-[1380px] w-full mx-auto px-6 py-6 space-y-6 text-xs">
-        {/* HOME TAB */}
         {activeNav === "Home" && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-white rounded-xl border border-blue-200 p-4 shadow-sm">
                 <div className="flex items-center justify-between text-blue-700 font-bold">
-                  <span>Program Tier</span>
+                  <span>Qualifying Tier</span>
                   <Award className="w-4 h-4" />
                 </div>
                 <p className="text-xl font-extrabold text-slate-900 mt-1">
                   {partner.qualifyingLevel}
                 </p>
-                <p className="text-slate-500 mt-0.5">{partner.programName}</p>
+                <p className="text-blue-700 font-semibold mt-0.5">
+                  {levelRulesSummary}
+                </p>
               </div>
               <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
                 <div className="flex items-center justify-between text-slate-600 font-bold">
@@ -281,7 +311,7 @@ function StandalonePartnerPortalContent() {
                   {myLeads.length} Leads
                 </p>
                 <Link
-                  href={`/forms/lead/${partner.id}`}
+                  href={personalLeadFormUrl}
                   className="text-blue-600 hover:underline font-semibold inline-flex items-center space-x-1 mt-0.5"
                 >
                   <span>Use your personal lead form</span>
@@ -311,7 +341,7 @@ function StandalonePartnerPortalContent() {
                     </h2>
                     {!canRegisterDeals && (
                       <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold text-[10px]">
-                        Disabled for {role} role (§4.3)
+                        View-only for {role} role
                       </span>
                     )}
                   </div>
@@ -381,7 +411,7 @@ function StandalonePartnerPortalContent() {
                       Submit a Referral Lead
                     </h2>
                     <Link
-                      href={`/forms/lead/${partner.id}`}
+                      href={personalLeadFormUrl}
                       className="text-blue-600 hover:underline font-semibold flex items-center space-x-1"
                     >
                       <span>Use your personal lead form</span>
@@ -422,8 +452,7 @@ function StandalonePartnerPortalContent() {
                     </form>
                   ) : (
                     <p className="text-amber-800 bg-amber-50 p-2.5 rounded-lg">
-                      Lead submission is disabled for the {role} role by your
-                      Program Administrator.
+                      Lead submission is disabled for the {role} role.
                     </p>
                   )}
                   <div className="divide-y divide-slate-100">
@@ -450,7 +479,6 @@ function StandalonePartnerPortalContent() {
           </>
         )}
 
-        {/* LEADS TAB (Omits internal Admin Owner split per §4.3) */}
         {activeNav === "Leads" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between">
@@ -458,10 +486,10 @@ function StandalonePartnerPortalContent() {
                 My Leads ({myLeads.length})
               </h2>
               <Link
-                href={`/forms/lead/${partner.id}`}
+                href={personalLeadFormUrl}
                 className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-semibold"
               >
-                Use your personal lead form (/forms/lead/{partner.id}) ↗
+                Use your personal lead form ↗
               </Link>
             </div>
             <table className="w-full text-left border-collapse">
@@ -493,7 +521,6 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* DEALS TAB */}
         {activeNav === "Deals" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <h2 className="font-bold text-base text-slate-900">
@@ -534,7 +561,6 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* REWARDS TAB */}
         {activeNav === "Rewards" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <h2 className="font-bold text-base text-slate-900">
@@ -565,7 +591,6 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* PAYOUTS TAB (§4.2 Partner-side list omits internal Invoice field!) */}
         {activeNav === "Payouts" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <h2 className="font-bold text-base text-slate-900">
@@ -608,7 +633,6 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* ONBOARDING TAB (All 6 Action Types accessible to Partner — §4.5) */}
         {activeNav === "Onboarding" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between">
@@ -638,8 +662,7 @@ function StandalonePartnerPortalContent() {
                 },
                 {
                   type: "Upload document",
-                  title:
-                    "3. Upload Signed Master Reseller Agreement (Admin Validation)",
+                  title: "3. Upload Signed Master Reseller Agreement",
                   status: "Completed",
                 },
                 {
@@ -678,7 +701,6 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* ASSETS TAB (Server- & Engine-Scoped — Fixes D6!) */}
         {activeNav === "Assets" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <div>
@@ -729,7 +751,6 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* HELP CENTER TAB */}
         {activeNav === "Help Center" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-3">
             <h2 className="font-bold text-base text-slate-900">
@@ -747,7 +768,6 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* NEWS TAB */}
         {activeNav === "News" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-3">
             <h2 className="font-bold text-base text-slate-900">
@@ -765,7 +785,6 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* TEAM TAB */}
         {activeNav === "Team" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-3">
             <h2 className="font-bold text-base text-slate-900">
@@ -788,11 +807,10 @@ function StandalonePartnerPortalContent() {
           </div>
         )}
 
-        {/* PROFILE & POST-ACCEPTANCE BANK DETAILS TAB (§4.6) */}
         {activeNav === "Profile & Bank" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <h2 className="font-bold text-base text-slate-900">
-              Post-Acceptance Banking &amp; Self-Invoicing Setup (§4.6)
+              Banking &amp; Self-Invoicing Setup
             </h2>
             <label className="flex items-center space-x-2">
               <input

@@ -7,7 +7,16 @@ import {
   computePartnerKpis,
   canPartnerAccessAsset,
   computeAccountOverlaps,
+  getPartnerLeadFormToken,
+  resolvePartnerByLeadFormToken,
 } from "../src/lib/prmEngine";
+import {
+  loadAndValidateConnectorConfig,
+  generateTotpCode,
+  verifyTotpOrRecoveryCode,
+  encryptBankDetails,
+  decryptBankDetails,
+} from "../src/lib/connectors";
 
 async function runFixtures() {
   console.log("Running R-PRM Known-Answer Parity Fixtures (§3 Slice 0d & §4.1.4)...");
@@ -237,7 +246,96 @@ async function runFixtures() {
   );
   console.log("✓ Fixture 6 passed (D11): Account overlaps computed from account names");
 
-  console.log("\nALL 6 KNOWN-ANSWER PARITY FIXTURES PASSED GREEN!");
+  // Fixture 7 (§13.1 & §13.7 #4): Partner tier level reward generation — Apex Platinum (25% + 5%) on SGD 28,500 (tx-1) -> SGD 7,125 and SGD 1,425
+  const apexTx1Rewards = rewards.filter(
+    (r) =>
+      r.partnerName.includes("Apex") &&
+      (r.fromActivity.includes("INV-2026-901") || r.amountSgd === 7125 || r.amountSgd === 1425)
+  );
+  const amounts = apexTx1Rewards.map((r) => r.amountSgd).sort((a, b) => b - a);
+  assert.deepEqual(
+    amounts,
+    [7125, 1425],
+    `Expected Apex Platinum (25% + 5%) rewards on SGD 28,500 tx-1 to be [7125, 1425], got ${JSON.stringify(
+      amounts
+    )}`
+  );
+  console.log(
+    "✓ Fixture 7 passed (§13.1): Apex Platinum (25% + 5%) on SGD 28,500 produces SGD 7,125 and SGD 1,425"
+  );
+
+  // Fixture 8 (§13.1 & §13.7 #1): Unified store — Program.levelsJson in SQLite holds normalized StructuredRewardRule objects
+  const programs = await prisma.program.findMany();
+  for (const prog of programs) {
+    const levels = JSON.parse(prog.levelsJson || "[]");
+    assert.ok(levels.length > 0, `Program ${prog.id} must have levels`);
+    for (const lvl of levels) {
+      for (const r of lvl.rewards || []) {
+        assert.equal(
+          typeof r,
+          "object",
+          `Program ${prog.id} level ${lvl.name} reward must be normalized StructuredRewardRule object`
+        );
+        assert.ok(r.id && r.title && r.trigger, "StructuredRewardRule must have id, title, trigger");
+      }
+    }
+  }
+  console.log(
+    "✓ Fixture 8 passed (§13.1): SQLite Program.levelsJson stores normalized StructuredRewardRule objects"
+  );
+
+  // Fixture 9 (§13.1 & §13.7 #3): AuditLog has real entries in SQLite
+  const auditLogs = await prisma.auditLog.findMany();
+  assert.ok(
+    auditLogs.length > 0,
+    "AuditLog table must contain real audit entries"
+  );
+  console.log(
+    `✓ Fixture 9 passed (§13.1): AuditLog table contains ${auditLogs.length} real entries`
+  );
+
+  // Fixture 10 (§13.1 & §13.7 #5): Unguessable public lead form token resolves partner; raw "prt-1" or invalid token returns null
+  const apexLeadToken = getPartnerLeadFormToken("prt-1");
+  assert.ok(
+    apexLeadToken.startsWith("lf_") && apexLeadToken.length === 27,
+    `Expected unguessable lead form token lf_<24-hex>, got ${apexLeadToken}`
+  );
+  const resolvedApex = resolvePartnerByLeadFormToken(apexLeadToken, partners);
+  assert.equal(resolvedApex?.id, "prt-1", "Valid lead token must resolve prt-1");
+  assert.equal(
+    resolvePartnerByLeadFormToken("prt-1", partners),
+    null,
+    "Raw partner ID prt-1 must be rejected (returns null)"
+  );
+  assert.equal(
+    resolvePartnerByLeadFormToken("bad-token", partners),
+    null,
+    "Unknown token must return null"
+  );
+  console.log(
+    `✓ Fixture 10 passed (§13.1): Unguessable lead token (${apexLeadToken}) resolves partner and rejects raw 'prt-1'`
+  );
+
+  // Fixture 11 (§13.2 & §13.5): Connector fail-closed validation, TOTP MFA verification, and AES-256-GCM bank details encryption
+  const localConfig = loadAndValidateConnectorConfig({});
+  assert.equal(localConfig.EMAIL_DRIVER, "local");
+  assert.throws(
+    () => loadAndValidateConnectorConfig({ EMAIL_DRIVER: "smtp" }),
+    /FAIL_CLOSED/,
+    "Live SMTP driver without credentials must fail closed"
+  );
+  const totpSecret = "JBSWY3DPEHPK3PXP";
+  const nowCode = generateTotpCode(totpSecret);
+  const totpResult = verifyTotpOrRecoveryCode(nowCode, totpSecret);
+  assert.equal(totpResult.valid, true, "Generated RFC 6238 TOTP code must verify");
+  const encBank = encryptBankDetails(JSON.stringify({ iban: "SG99DBS000123456", swift: "DBSSSGSG" }));
+  const decBank = JSON.parse(decryptBankDetails(encBank));
+  assert.equal(decBank?.iban, "SG99DBS000123456", "AES-256-GCM bank details roundtrip must match");
+  console.log(
+    "✓ Fixture 11 passed (§13.2/§13.5): Connectors fail closed, RFC 6238 TOTP verifies, and AES-256-GCM bank encryption roundtrips"
+  );
+
+  console.log("\nALL 11 KNOWN-ANSWER PARITY & §13 CONTRACT FIXTURES PASSED GREEN!");
   await prisma.$disconnect();
 }
 

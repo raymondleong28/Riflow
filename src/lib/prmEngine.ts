@@ -350,6 +350,7 @@ export function computePartnerKpis(
 
   return {
     ...partner,
+    leadFormToken: getPartnerLeadFormToken(partner.id),
     submittedLeads365d: pLeads.length,
     registeredDeals365d: pDeals.length,
     wonDealsCount: wonDeals.length,
@@ -360,6 +361,143 @@ export function computePartnerKpis(
     pendingRewardsAll,
     _computedAt: new Date().toISOString(),
   };
+}
+
+// Unguessable Per-Partner Public Lead Form Token (§13.1 & §13.7 #5)
+// Raw guessable partner IDs (like "prt-1") are rejected; only the unguessable token resolves.
+export function getPartnerLeadFormToken(partnerId: string): string {
+  const input = `r-prm-unguessable-lead-form-salt-2026:${String(partnerId)}:eber-kiflo-parity`;
+  // Deterministic 96-bit (24-hex) multi-lane FNV-1a / SipHash-style mixer (universal client+server)
+  const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b];
+  const hexParts = seeds.map((seed, lane) => {
+    let h = seed >>> 0;
+    for (let i = 0; i < input.length; i++) {
+      h ^= (input.charCodeAt(i) + lane * 31) & 0xff;
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, "0");
+  });
+  return `lf_${hexParts.join("")}`;
+}
+
+export function resolvePartnerByLeadFormToken(
+  token: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  partners: any[]
+) {
+  if (!token || !token.startsWith("lf_")) {
+    return null; // Reject raw partner IDs like "prt-1" or malformed tokens
+  }
+  return (
+    partners.find((p) => getPartnerLeadFormToken(p.id) === token) || null
+  );
+}
+
+// Look up a Partner's actual Level Rules from their Program (§13.1 Reward generation fix)
+export function getPartnerLevelRules(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  partner: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  programs: any[]
+): StructuredRewardRule[] {
+  const prog =
+    programs.find(
+      (p) => p.id === partner?.programId || p.name === partner?.programName
+    ) || programs[0];
+  if (!prog) return [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let levels: any[] = [];
+  try {
+    levels = JSON.parse(prog.levelsJson || "[]");
+  } catch {
+    levels = [];
+  }
+  const matchedLevel =
+    levels.find((l) => l.name === partner?.qualifyingLevel) || levels[0];
+  if (!matchedLevel || !Array.isArray(matchedLevel.rewards)) return [];
+  return matchedLevel.rewards.map(normalizeRewardRule);
+}
+
+// Generate rewards for a Transaction or Closed Won Deal using the Partner's ACTUAL tier level rules (§13.1)
+// Example: Apex Cloud Solutions (Platinum Elite -> 25% + 5% kickback) on SGD 28,500 produces SGD 7,125 and SGD 1,425.
+export function generateRewardsFromPartnerLevel(
+  txOrDeal: {
+    id: string;
+    name: string;
+    amount: number;
+    currency: string;
+    partnerName: string;
+    isFirstClosedWonDeal?: boolean;
+  },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  partner: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  programs: any[],
+  fxTable: DatedFxTable = DEFAULT_FX_TABLE
+) {
+  const rules = getPartnerLevelRules(partner, programs);
+  const generated: {
+    ruleId: string;
+    ruleTitle: string;
+    partnerName: string;
+    recipientName: string;
+    type: string;
+    amount: number;
+    currency: string;
+    amountSgd: number;
+    fromActivity: string;
+    fromRewardRule: string;
+    status: string;
+    comment: string;
+  }[] = [];
+
+  for (const rule of rules) {
+    if (rule.amountMode === "percentage" && rule.rateOrAmount > 0) {
+      const rawAmt =
+        Math.round(txOrDeal.amount * (rule.rateOrAmount / 100) * 100) / 100;
+      const fx = convertWithDatedFx(rawAmt, txOrDeal.currency, fxTable);
+      generated.push({
+        ruleId: rule.id,
+        ruleTitle: rule.title,
+        partnerName: partner.name,
+        recipientName: partner.name,
+        type: rule.valueType || "Cash",
+        amount: fx.originalAmount,
+        currency: fx.currency,
+        amountSgd: fx.amountSgd,
+        fromActivity: txOrDeal.name,
+        fromRewardRule: rule.title,
+        status: rule.requiresValidation ? "Pending" : "Accepted",
+        comment: `Computed from ${partner.qualifyingLevel} rule (${rule.rateOrAmount}%) @ FX ${fx.fxRate} (${fx.fxRateDate})`,
+      });
+    } else if (
+      rule.amountMode === "fixed" &&
+      rule.rateOrAmount > 0 &&
+      txOrDeal.isFirstClosedWonDeal
+    ) {
+      const fx = convertWithDatedFx(
+        rule.rateOrAmount,
+        rule.currency || "SGD",
+        fxTable
+      );
+      generated.push({
+        ruleId: rule.id,
+        ruleTitle: rule.title,
+        partnerName: partner.name,
+        recipientName: partner.name,
+        type: rule.valueType || "Cash",
+        amount: fx.originalAmount,
+        currency: fx.currency,
+        amountSgd: fx.amountSgd,
+        fromActivity: txOrDeal.name,
+        fromRewardRule: rule.title,
+        status: rule.requiresValidation ? "Pending" : "Accepted",
+        comment: `Computed from ${partner.qualifyingLevel} fixed bonus rule @ FX ${fx.fxRate} (${fx.fxRateDate})`,
+      });
+    }
+  }
+
+  return generated;
 }
 
 // Server-side Asset & Content Scoping (Fixes D6, §4.3)

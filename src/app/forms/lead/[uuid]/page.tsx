@@ -1,19 +1,19 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { usePrm } from "@/context/PrmContext";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, AlertTriangle } from "lucide-react";
 
 export default function PublicPartnerLeadFormPage() {
   const params = useParams();
-  const uuid = String(params?.uuid || "prt-1");
-  const { partners, mutate } = usePrm();
+  const token = String(params?.uuid || "");
 
-  const partner =
-    partners.find((p) => p.id === uuid || p.name === uuid) || partners[0];
-
+  const [checking, setChecking] = useState(true);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [partner, setPartner] = useState<any | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
@@ -26,26 +26,86 @@ export default function PublicPartnerLeadFormPage() {
     outletsCount: "3",
     posSolution: "CloudPOS Pro",
     remarks: "",
+    consentTerms72: false,
   });
+
+  useEffect(() => {
+    async function verifyToken() {
+      try {
+        const res = await fetch(
+          `/api/public-forms?leadToken=${encodeURIComponent(token)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          setPartner(null);
+        } else {
+          const json = await res.json();
+          setPartner(json.valid ? json.partner : null);
+        }
+      } catch {
+        setPartner(null);
+      } finally {
+        setChecking(false);
+      }
+    }
+    verifyToken();
+  }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await mutate(
-      "CREATE_LEAD",
-      {
-        ...form,
-        source: "Public Partner Lead Form",
-        sourcePartnerId: partner?.id || uuid,
-        sourcePartnerName: partner?.name || "Apex Cloud Solutions Pte Ltd",
-        assignedPartner: partner?.name || "Apex Cloud Solutions Pte Ltd",
-        assignedContact: partner
-          ? `${partner.contactFirstName} ${partner.contactLastName}`
-          : "Partner Representative",
-      },
-      `Lead submitted and attributed to ${partner?.name || uuid}!`
-    );
+    setError(null);
+    if (!form.consentTerms72) {
+      setError(
+        "Please confirm prospect data consent under Eber General Terms 7.2."
+      );
+      return;
+    }
+
+    const res = await fetch("/api/public-forms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        formType: "public_lead",
+        payload: {
+          ...form,
+          token,
+        },
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setError(json.error || "Failed to submit referral lead");
+      return;
+    }
     setSubmitted(true);
   };
+
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 text-xs text-slate-500">
+        Verifying referral link...
+      </div>
+    );
+  }
+
+  // §13.1 & §13.7 #5: Reject unknown or guessable raw partner IDs with "This link isn't valid"
+  if (!partner) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl max-w-md w-full p-8 shadow-xl border border-slate-200 text-center space-y-3 text-xs">
+          <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto" />
+          <h1 className="text-lg font-extrabold text-slate-900">
+            This link isn&apos;t valid
+          </h1>
+          <p className="text-slate-600">
+            This referral lead form URL is invalid or has expired. Please
+            request an updated personal referral link from your R-Cloud Partner
+            representative.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 py-12 px-4 flex items-center justify-center">
@@ -56,10 +116,10 @@ export default function PublicPartnerLeadFormPage() {
           </div>
           <div>
             <span className="text-[10px] uppercase tracking-wider bg-blue-800 px-2 py-0.5 rounded font-bold">
-              Public Referral Lead Intake Form
+              Verified Partner Referral Form
             </span>
             <h1 className="text-lg font-extrabold mt-1">
-              Referred by {partner?.name || "Authorized R-Cloud Partner"}
+              Referred by {partner.name}
             </h1>
           </div>
         </div>
@@ -68,21 +128,27 @@ export default function PublicPartnerLeadFormPage() {
           <div className="p-8 text-center space-y-3">
             <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
             <h2 className="text-base font-bold text-slate-900">
-              Thank you! Your inquiry has been registered.
+              Thank you! Your referral lead has been registered.
             </h2>
             <p className="text-slate-600">
-              Automatically attributed to{" "}
-              <strong>{partner?.name || uuid}</strong> in R-PRM.
+              Attributed to <strong>{partner.name}</strong> ({partner.programName}
+              ).
             </p>
             <button
               onClick={() => setSubmitted(false)}
               className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold"
             >
-              Submit Another Lead
+              Submit Another Referral Lead
             </button>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="p-6 space-y-3.5">
+            {error && (
+              <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 font-semibold">
+                {error}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
@@ -188,12 +254,31 @@ export default function PublicPartnerLeadFormPage() {
                 Requirements / Notes
               </label>
               <textarea
-                rows={3}
+                rows={2}
                 value={form.remarks}
                 onChange={(e) => setForm({ ...form, remarks: e.target.value })}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg"
               />
             </div>
+
+            {/* Required Consent Checkbox — Eber General Terms 7.2 (§13.1 & §13.7 #5) */}
+            <label className="flex items-start space-x-2.5 p-3 rounded-xl bg-blue-50/70 border border-blue-200 cursor-pointer">
+              <input
+                required
+                type="checkbox"
+                checked={form.consentTerms72}
+                onChange={(e) =>
+                  setForm({ ...form, consentTerms72: e.target.checked })
+                }
+                className="mt-0.5 rounded text-blue-600"
+              />
+              <span className="text-slate-700 leading-relaxed">
+                I confirm that I have obtained the prospect&apos;s prior consent
+                to share their contact and business details with Eber in
+                accordance with <strong>Eber General Terms 7.2</strong> and
+                applicable data protection laws (PDPA / GDPR). *
+              </span>
+            </label>
 
             <button
               type="submit"

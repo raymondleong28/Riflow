@@ -1,28 +1,42 @@
 "use client";
 
 import React, { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Shield } from "lucide-react";
+import { Shield, AlertCircle } from "lucide-react";
 
 export default function CoworkerLoginPage() {
-  const router = useRouter();
-  const [email, setEmail] = useState("alex@r-prm.example.com");
-  const [password, setPassword] = useState("••••••••••••");
-  const [role, setRole] = useState("Admin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    await fetch("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        identityType: "coworker",
-        email,
-        role,
-      }),
-    });
-    router.push("/dashboard");
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identityType: "coworker",
+          email,
+          password,
+          mfaCode: mfaCode || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json.error || "Sign-in failed");
+        setSubmitting(false);
+        return;
+      }
+      window.location.href = "/dashboard";
+    } catch (err) {
+      setError(String(err));
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -34,7 +48,7 @@ export default function CoworkerLoginPage() {
           </div>
           <div>
             <h1 className="text-lg font-extrabold text-slate-900">
-              Sign In to R-PRM (Coworker Admin)
+              Sign In to R-PRM
             </h1>
             <p className="text-slate-500">
               Internal Channel &amp; Partnership Workspace
@@ -42,59 +56,82 @@ export default function CoworkerLoginPage() {
           </div>
         </div>
 
+        {error && (
+          <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 font-semibold flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
         <form onSubmit={handleLogin} className="space-y-3.5">
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Coworker Email
+              Coworker Email *
             </label>
             <input
               required
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@r-prm.example.com"
               className="w-full px-3 py-2 border border-slate-300 rounded-lg"
             />
           </div>
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Password
+              Password *
             </label>
             <input
               required
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
               className="w-full px-3 py-2 border border-slate-300 rounded-lg"
             />
           </div>
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Coworker Role (§3 Slice 0c)
+              Authenticator Code / Recovery Code (Optional unless enforced)
             </label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            >
-              <option value="Admin">Administrator</option>
-              <option value="Member">Member (Partner Account Manager)</option>
-            </select>
+            <input
+              value={mfaCode}
+              onChange={(e) => setMfaCode(e.target.value)}
+              placeholder="6-digit TOTP or recovery code"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono"
+            />
           </div>
           <button
             type="submit"
-            className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm"
+            disabled={submitting}
+            className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold text-sm"
           >
-            Sign in
+            {submitting ? "Signing in..." : "Sign in"}
           </button>
         </form>
+
+        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
+          <p className="font-bold text-slate-800">
+            Local Environment Accounts (Role assigned by database):
+          </p>
+          <p>
+            • Admin: <code>alex@r-prm.example.com</code>
+          </p>
+          <p>
+            • Member: <code>sarah@r-prm.example.com</code>
+          </p>
+          <p>
+            • Password: <code>RprmAdmin2026!</code>
+          </p>
+        </div>
 
         <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-slate-500">
           <span className="flex items-center space-x-1">
             <Shield className="w-3.5 h-3.5 text-blue-600" />
-            <span>SAML 2.0 SSO Enabled</span>
+            <span>SAML 2.0 &amp; TOTP Ready</span>
           </span>
           <Link href="/p/login" className="text-blue-600 font-semibold">
-            Partner Portal Login →
+            Partner Portal Sign In →
           </Link>
         </div>
       </div>

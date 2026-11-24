@@ -896,7 +896,7 @@ export default function ProgramDetailPage() {
               {/* Quick Preset Loader for Eber's 3 Real Commission Programs (§4.1.4) */}
               <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 space-y-1.5">
                 <span className="text-[11px] font-bold text-blue-800">
-                  Load Eber Commission Fixture Template (§4.1.4):
+                  Load Eber Commission Fixture Template:
                 </span>
                 <div className="flex flex-wrap gap-1.5">
                   <button

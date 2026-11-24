@@ -1,33 +1,40 @@
 "use client";
 
 import React, { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { usePrm } from "@/context/PrmContext";
+import { AlertCircle } from "lucide-react";
 
 export default function PartnerPortalLoginPage() {
-  const router = useRouter();
-  const { partners } = usePrm();
-  const [partnerId, setPartnerId] = useState("prt-1");
-  const [role, setRole] = useState("Manager");
-
-  const selectedPartner =
-    partners.find((p) => p.id === partnerId) || partners[0];
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    await fetch("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        identityType: "partner",
-        email:
-          selectedPartner?.contactEmail || "jordan.lee@apexcloud.example.com",
-        partnerId: selectedPartner?.id || "prt-1",
-        role,
-      }),
-    });
-    router.push(`/p?partnerId=${selectedPartner?.id || "prt-1"}&role=${role}`);
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identityType: "partner",
+          email,
+          password,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json.error || "Partner sign-in failed");
+        setSubmitting(false);
+        return;
+      }
+      window.location.href = "/p";
+    } catch (err) {
+      setError(String(err));
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -47,44 +54,69 @@ export default function PartnerPortalLoginPage() {
           </div>
         </div>
 
+        {error && (
+          <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 font-semibold flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
         <form onSubmit={handleLogin} className="space-y-3.5">
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Select Partner Account
+              Partner Work Email *
             </label>
-            <select
-              value={partnerId}
-              onChange={(e) => setPartnerId(e.target.value)}
+            <input
+              required
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="contact@partner-company.com"
               className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            >
-              {partners.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.contactEmail})
-                </option>
-              ))}
-            </select>
+            />
           </div>
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
-              Partner User Role (§3 Slice 0c &amp; §4.3)
+              Password *
             </label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
+            <input
+              required
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
               className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            >
-              <option value="Manager">Manager (Main Contact)</option>
-              <option value="SalesRep">Sales Rep</option>
-              <option value="Stakeholder">Stakeholder (View-Only)</option>
-            </select>
+            />
           </div>
           <button
             type="submit"
-            className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm"
+            disabled={submitting}
+            className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold text-sm"
           >
-            Enter Partner Portal
+            {submitting ? "Signing in..." : "Sign in to Partner Portal"}
           </button>
         </form>
+
+        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
+          <p className="font-bold text-slate-800">
+            Local Environment Partner Logins (Role assigned by database):
+          </p>
+          <p>
+            • Apex Cloud (Platinum Manager):{" "}
+            <code>jordan.lee@apexcloud.example.com</code>
+          </p>
+          <p>
+            • Apex Cloud (Sales Rep):{" "}
+            <code>darren.koh@apexcloud.example.com</code>
+          </p>
+          <p>
+            • Vanguard (Stakeholder):{" "}
+            <code>sophia@vanguardmatrix.example.com</code>
+          </p>
+          <p>
+            • Password: <code>RprmPartner2026!</code>
+          </p>
+        </div>
 
         <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
           <Link
@@ -94,7 +126,7 @@ export default function PartnerPortalLoginPage() {
             Apply to Become a Partner →
           </Link>
           <Link href="/login" className="text-slate-400 hover:text-slate-600">
-            Coworker Admin
+            Coworker Sign In
           </Link>
         </div>
       </div>

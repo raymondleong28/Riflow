@@ -124,7 +124,7 @@ export default function RewardDetailPage() {
         {reward.status === "Pending" && (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-3 h-fit">
             <h3 className="font-bold text-sm text-slate-900">
-              Refuse Reward (Requires Reason — §4.1.3)
+              Refuse Reward (Requires Reason)
             </h3>
             <textarea
               rows={3}

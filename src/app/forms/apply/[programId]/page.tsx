@@ -1,20 +1,19 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { usePrm } from "@/context/PrmContext";
 import { CheckCircle2, ShieldCheck } from "lucide-react";
 
 export default function PublicPartnerApplicationFormPage() {
   const params = useParams();
   const programId = String(params?.programId || "prog-strategic");
-  const { programs, mutate } = usePrm();
 
-  const program =
-    programs.find((p) => p.id === programId) || programs[0];
-
+  const [programName, setProgramName] = useState(
+    "R-Cloud Strategic Solution Partners"
+  );
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
     companyName: "",
     companyWebsite: "https://",
@@ -33,30 +32,45 @@ export default function PublicPartnerApplicationFormPage() {
       "Expanding omnichannel loyalty & POS consulting practice in APAC.",
   });
 
+  useEffect(() => {
+    fetch(`/api/public-forms?programId=${encodeURIComponent(programId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.program?.name) {
+          setProgramName(data.program.name);
+        }
+      })
+      .catch(() => {});
+  }, [programId]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await mutate(
-      "CREATE_PARTNER",
-      {
-        name: form.companyName,
-        programId: program?.id || "prog-strategic",
-        programName: program?.name || "R-Cloud Strategic Solution Partners",
-        country: form.country,
-        contactFirstName: form.contactFirstName,
-        contactLastName: form.contactLastName,
-        contactEmail: form.contactEmail,
-        contactJobTitle: form.contactJobTitle,
-        contactPhone: form.companyPhone,
-        companyWebsite: form.companyWebsite,
-        industry: form.industry,
-        status: "Pending",
-        onboardingStatus: "Not started",
-        prospectionStage: "New",
-        portalAccess: false, // Granted only upon admin acceptance (§4.6)
-      },
-      `Partner application for "${form.companyName}" submitted for review!`
-    );
-    setSubmitted(true);
+    setSubmitting(true);
+    try {
+      await fetch("/api/public-forms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          formType: "public_application",
+          data: {
+            name: form.companyName,
+            programId,
+            programName,
+            country: form.country,
+            contactFirstName: form.contactFirstName,
+            contactLastName: form.contactLastName,
+            contactEmail: form.contactEmail,
+            contactJobTitle: form.contactJobTitle,
+            contactPhone: form.companyPhone,
+            companyWebsite: form.companyWebsite,
+            industry: form.industry,
+          },
+        }),
+      });
+      setSubmitted(true);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -72,7 +86,7 @@ export default function PublicPartnerApplicationFormPage() {
                 Public Partner Program Application
               </span>
               <h1 className="text-lg font-extrabold mt-1">
-                Apply to {program?.name || "R-Cloud Partner Program"}
+                Apply to {programName}
               </h1>
             </div>
           </div>
@@ -98,7 +112,7 @@ export default function PublicPartnerApplicationFormPage() {
             </p>
             <div className="pt-2">
               <Link
-                href={`/programs/${program?.id || "prog-strategic"}`}
+                href={`/programs/${programId}`}
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold inline-block"
               >
                 Review in Admin Applications Queue →
@@ -110,7 +124,7 @@ export default function PublicPartnerApplicationFormPage() {
             <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 flex items-center space-x-2 text-blue-900">
               <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
               <span>
-                <strong>Data Safety Policy (§4.6):</strong> Bank payout details
+                <strong>Data Safety Policy:</strong> Bank payout details
                 are never collected on the public application form; they are
                 collected securely inside your Partner Portal after acceptance.
               </span>
@@ -271,9 +285,10 @@ export default function PublicPartnerApplicationFormPage() {
 
             <button
               type="submit"
+              disabled={submitting}
               className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow"
             >
-              Submit Partner Application
+              {submitting ? "Submitting Application..." : "Submit Partner Application"}
             </button>
           </form>
         )}
