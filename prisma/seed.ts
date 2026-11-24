@@ -1,4 +1,8 @@
 import { PrismaClient } from "@prisma/client";
+import {
+  normalizeRewardRule,
+  generateRewardsFromPartnerLevel,
+} from "../src/lib/prmEngine";
 
 const prisma = new PrismaClient();
 
@@ -22,6 +26,7 @@ export async function seedDatabase() {
   await prisma.partner.deleteMany();
   await prisma.program.deleteMany();
   await prisma.appSetting.deleteMany();
+  await prisma.auditLog.deleteMany();
 
   const defaultPermissions = JSON.stringify({
     Leads: {
@@ -47,58 +52,85 @@ export async function seedDatabase() {
     },
   });
 
-  const defaultLevels = JSON.stringify([
-    {
-      id: "lvl-silver",
-      name: "Silver Tier",
-      badgeColor: "slate",
-      rewards: [
-        { id: "r1", title: "10% Recurring Deal Commission", trigger: "On every transaction from won deals", rate: "10%" },
-      ],
-      benefits: [
-        { id: "b1", title: "Co-branded Sales Collateral & Portal Access" },
-        { id: "b2", title: "Standard Partner Directory Listing" },
-      ],
-      requirements: [
-        { id: "req1", metric: "Minimum annual revenue", target: "SGD 10,000" },
-        { id: "req2", metric: "Certified sales reps", target: "1 certified member" },
-      ],
-    },
-    {
-      id: "lvl-gold",
-      name: "Gold Tier",
-      badgeColor: "blue",
-      rewards: [
-        { id: "r2", title: "18% Recurring Deal Commission", trigger: "On every transaction from won deals", rate: "18%" },
-        { id: "r3", title: "SGD 500 Deal Registration Bonus", trigger: "On first Closed Won enterprise deal", rate: "SGD 500" },
-      ],
-      benefits: [
-        { id: "b3", title: "Dedicated Partner Account Manager (PAM)" },
-        { id: "b4", title: "Joint Marketing Development Funds (MDF)" },
-      ],
-      requirements: [
-        { id: "req3", metric: "Minimum annual revenue", target: "SGD 50,000" },
-        { id: "req4", metric: "Certified sales reps", target: "3 certified members" },
-      ],
-    },
-    {
-      id: "lvl-platinum",
-      name: "Platinum Elite",
-      badgeColor: "indigo",
-      rewards: [
-        { id: "r4", title: "25% Recurring Deal Commission", trigger: "On every transaction from won deals", rate: "25%" },
-        { id: "r5", title: "5% Annual Milestone Kickback", trigger: "When annual sourced revenue exceeds SGD 150,000", rate: "5%" },
-      ],
-      benefits: [
-        { id: "b5", title: "Executive Quarterly Business Reviews & Co-Selling Priority" },
-        { id: "b6", title: "Featured Placement in Global Partner Directory" },
-      ],
-      requirements: [
-        { id: "req5", metric: "Minimum annual revenue", target: "SGD 150,000" },
-        { id: "req6", metric: "Registration fees", target: "Waived for Strategic Tier" },
-      ],
-    },
-  ]);
+  const defaultLevels = JSON.stringify(
+    [
+      {
+        id: "lvl-silver",
+        name: "Silver Tier",
+        badgeColor: "slate",
+        rewards: [
+          normalizeRewardRule({
+            id: "r1",
+            title: "10% Recurring Deal Commission",
+            trigger: "On every transaction from won deals",
+            rate: "10%",
+          }),
+        ],
+        benefits: [
+          { id: "b1", title: "Co-branded Sales Collateral & Portal Access" },
+          { id: "b2", title: "Standard Partner Directory Listing" },
+        ],
+        requirements: [
+          { id: "req1", metric: "Minimum annual revenue", target: "SGD 10,000" },
+          { id: "req2", metric: "Certified sales reps", target: "1 certified member" },
+        ],
+      },
+      {
+        id: "lvl-gold",
+        name: "Gold Tier",
+        badgeColor: "blue",
+        rewards: [
+          normalizeRewardRule({
+            id: "r2",
+            title: "18% Recurring Deal Commission",
+            trigger: "On every transaction from won deals",
+            rate: "18%",
+          }),
+          normalizeRewardRule({
+            id: "r3",
+            title: "SGD 500 Deal Registration Bonus",
+            trigger: "On first Closed Won enterprise deal",
+            rate: "SGD 500",
+          }),
+        ],
+        benefits: [
+          { id: "b3", title: "Dedicated Partner Account Manager (PAM)" },
+          { id: "b4", title: "Joint Marketing Development Funds (MDF)" },
+        ],
+        requirements: [
+          { id: "req3", metric: "Minimum annual revenue", target: "SGD 50,000" },
+          { id: "req4", metric: "Certified sales reps", target: "3 certified members" },
+        ],
+      },
+      {
+        id: "lvl-platinum",
+        name: "Platinum Elite",
+        badgeColor: "indigo",
+        rewards: [
+          normalizeRewardRule({
+            id: "r4",
+            title: "25% Recurring Deal Commission",
+            trigger: "On every transaction from won deals",
+            rate: "25%",
+          }),
+          normalizeRewardRule({
+            id: "r5",
+            title: "5% Annual Milestone Kickback",
+            trigger: "When annual sourced revenue exceeds SGD 150,000",
+            rate: "5%",
+          }),
+        ],
+        benefits: [
+          { id: "b5", title: "Executive Quarterly Business Reviews & Co-Selling Priority" },
+          { id: "b6", title: "Featured Placement in Global Partner Directory" },
+        ],
+        requirements: [
+          { id: "req5", metric: "Minimum annual revenue", target: "SGD 150,000" },
+          { id: "req6", metric: "Registration fees", target: "Waived for Strategic Tier" },
+        ],
+      },
+    ]
+  );
 
   const prog1 = await prisma.program.create({
     data: {
@@ -861,15 +893,99 @@ export async function seedDatabase() {
     ],
   });
 
-  // Rewards (Pending + Accepted + Paid)
-  await prisma.reward.createMany({
+  // Generate rewards directly from each Partner's actual Program Level rules (§13.1 & §14.1)
+  const [seededPrograms, seededPartners, seededTransactions] = await Promise.all([
+    prisma.program.findMany(),
+    prisma.partner.findMany(),
+    prisma.transaction.findMany({ orderBy: { id: "asc" } }),
+  ]);
+
+  let seq = 1041;
+  for (const tx of seededTransactions) {
+    const partner = seededPartners.find((p) => p.name === tx.partnerName);
+    if (!partner) continue;
+    const generated = generateRewardsFromPartnerLevel(
+      {
+        id: tx.id,
+        name: tx.name,
+        amount: tx.amount,
+        currency: tx.currency,
+        partnerName: tx.partnerName,
+      },
+      partner,
+      seededPrograms
+    );
+    for (const g of generated) {
+      const rewardNumber = `RW-${seq--}`;
+      const isPaidTx = tx.id === "tx-6";
+      const isBatchReadyTx = tx.id === "tx-4";
+      await prisma.reward.create({
+        data: {
+          rewardNumber,
+          partnerName: g.partnerName,
+          recipientName: g.recipientName,
+          type: g.type,
+          amount: g.amount,
+          currency: g.currency,
+          amountSgd: g.amountSgd,
+          fromActivity: g.fromActivity,
+          fromRewardRule: g.fromRewardRule,
+          status: isPaidTx ? "Paid" : isBatchReadyTx ? "Accepted" : "Pending",
+          payoutNumber: isPaidTx
+            ? "PO-2026-03"
+            : isBatchReadyTx
+            ? "PO-2026-04"
+            : "",
+          comment: g.comment,
+        },
+      });
+    }
+  }
+
+  // Initial AuditLog entries including DELETE of accidental preset reward (§14.2 Slice 1)
+  await prisma.auditLog.createMany({
     data: [
-      { id: "rew-1", rewardNumber: "RW-1041", partnerName: "Apex Cloud Solutions Pte Ltd", recipientName: "Apex Cloud Solutions Pte Ltd", type: "Cash", amount: 5130, currency: "SGD", amountSgd: 5130, fromActivity: "INV-2026-901 · Solaris Annual License", fromRewardRule: "18% Recurring Deal Commission", status: "Pending", payoutNumber: "", comment: "Q4 enterprise close commission" },
-      { id: "rew-2", rewardNumber: "RW-1040", partnerName: "Apex Cloud Solutions Pte Ltd", recipientName: "Apex Cloud Solutions Pte Ltd", type: "Cash", amount: 500, currency: "SGD", amountSgd: 500, fromActivity: "ENT - Solaris Luxury Resort Group (Annual)", fromRewardRule: "SGD 500 Deal Registration Bonus", status: "Pending", payoutNumber: "", comment: "First Closed Won bonus" },
-      { id: "rew-3", rewardNumber: "RW-1039", partnerName: "NovaBridge Digital Systems", recipientName: "NovaBridge Digital Systems", type: "Cash", amount: 3456, currency: "SGD", amountSgd: 3456, fromActivity: "INV-2026-884 · UrbanPulse Annual Subscription", fromRewardRule: "18% Recurring Deal Commission", status: "Pending", payoutNumber: "", comment: "Pending finance validation" },
-      { id: "rew-4", rewardNumber: "RW-1038", partnerName: "BluePeak Commerce Advisory", recipientName: "BluePeak Commerce Advisory", type: "Cash", amount: 1080, currency: "USD", amountSgd: 1458, fromActivity: "INV-2026-842 · Emerald Bay Q4 Renewal", fromRewardRule: "18% Recurring Deal Commission", status: "Pending", payoutNumber: "", comment: "Awaiting Q4 invoice validation" },
-      { id: "rew-5", rewardNumber: "RW-1037", partnerName: "Synthetix POS & Retail Tech", recipientName: "Synthetix POS & Retail Tech", type: "Cash", amount: 7560, currency: "MYR", amountSgd: 2268, fromActivity: "INV-2026-790 · KL Gourmet POS Suite", fromRewardRule: "18% Recurring Deal Commission", status: "Accepted", payoutNumber: "PO-2026-04", comment: "Approved for November batch" },
-      { id: "rew-6", rewardNumber: "RW-1036", partnerName: "Stratos FinTech Integrations", recipientName: "Stratos FinTech Integrations", type: "Cash", amount: 972, currency: "SGD", amountSgd: 972, fromActivity: "INV-2026-688 · Stratos FinTech Add-on Pack", fromRewardRule: "18% Recurring Deal Commission", status: "Paid", payoutNumber: "PO-2026-03", comment: "Settled via Wise Corporate" },
+      {
+        actor: "Ray (Workspace Owner)",
+        actorRole: "coworker (Administrator)",
+        action: "DELETE",
+        objectType: "RewardRule",
+        objectId: "prog-strategic:lvl-silver:Quarterly Quota Accelerator Bonus",
+        summary:
+          'Deleted accidental preset reward rule "SGD 1,000 Quarterly Quota Accelerator Bonus" from Silver Tier of prog-strategic (§14.2 Slice 1)',
+        diffJson: JSON.stringify({
+          programId: "prog-strategic",
+          level: "Silver Tier",
+          deletedRuleTitle: "SGD 1,000 Quarterly Quota Accelerator Bonus",
+          remainingRules: ["10% Recurring Deal Commission"],
+        }),
+      },
+      {
+        actor: "System Engine",
+        actorRole: "coworker (Administrator)",
+        action: "CREATE",
+        objectType: "Reward",
+        objectId: "tx-1",
+        summary:
+          "Computed Platinum Elite rewards for Apex Cloud Solutions (SGD 28,500 -> 25% SGD 7,125 + 5% SGD 1,425)",
+        diffJson: JSON.stringify({
+          transaction: "INV-2026-901 · Solaris Annual License",
+          rewardsSgd: [7125, 1425],
+        }),
+      },
+      {
+        actor: "System Engine",
+        actorRole: "coworker (Administrator)",
+        action: "CREATE",
+        objectType: "Reward",
+        objectId: "tx-4",
+        summary:
+          "Computed Platinum Elite rewards for Synthetix POS & Retail Tech (SGD 12,600 -> 25% SGD 3,150 + 5% SGD 630)",
+        diffJson: JSON.stringify({
+          transaction: "INV-2026-790 · KL Gourmet POS Suite",
+          rewardsSgd: [3150, 630],
+        }),
+      },
     ],
   });
 

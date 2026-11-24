@@ -809,6 +809,53 @@ export default function ProgramDetailPage() {
             {/* §4.3 Role-Based Partner Portal Permissions (Persisted & Enforced in /p) */}
             {activeTab === "Settings" && (
               <div className="space-y-5">
+                {/* §14.2 Slice 4: Per-Program Payout Schedule & Threshold Override */}
+                <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-3">
+                  <h4 className="font-bold text-slate-900 text-sm">
+                    Program Payout Schedule &amp; Threshold Override
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Payout Cadence (Default / Override)
+                      </label>
+                      <select
+                        value={String(autoEmails.payoutCadence || "quarterly")}
+                        onChange={(e) =>
+                          handleSelectEmailTemplate(
+                            "payoutCadence",
+                            e.target.value
+                          )
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                      >
+                        <option value="quarterly">
+                          Quarterly (1 payout per partner per quarter)
+                        </option>
+                        <option value="monthly">
+                          Monthly (1 payout per partner per month)
+                        </option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Minimum Payout Threshold (SGD)
+                      </label>
+                      <input
+                        type="number"
+                        defaultValue={Number(autoEmails.payoutThresholdSgd ?? 250)}
+                        onBlur={(e) =>
+                          handleSelectEmailTemplate(
+                            "payoutThresholdSgd",
+                            e.target.value
+                          )
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 <div className="flex items-center space-x-2 font-bold text-sm text-slate-900">
                   <Shield className="w-4 h-4 text-blue-600" />
                   <span>

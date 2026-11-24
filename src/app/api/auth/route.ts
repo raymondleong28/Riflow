@@ -10,14 +10,18 @@ import { verifyTotpOrRecoveryCode } from "@/lib/connectors";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  const showDevLogins =
+    process.env.NODE_ENV !== "production" &&
+    process.env.SHOW_DEV_LOGINS === "true";
+
   const session = getServerSession(req);
   if (!session) {
     return NextResponse.json(
-      { authenticated: false, session: null },
+      { authenticated: false, session: null, showDevLogins },
       { status: 401 }
     );
   }
-  return NextResponse.json({ authenticated: true, session });
+  return NextResponse.json({ authenticated: true, session, showDevLogins });
 }
 
 export async function POST(req: NextRequest) {

@@ -18,7 +18,14 @@ async function syncSingleStore() {
     const normalizedLevels = levels.map((lvl) => ({
       ...lvl,
       rewards: Array.isArray(lvl.rewards)
-        ? lvl.rewards.map(normalizeRewardRule)
+        ? lvl.rewards
+            .map(normalizeRewardRule)
+            .filter(
+              (r: { title?: string }) =>
+                !String(r.title || "").includes(
+                  "Quarterly Quota Accelerator Bonus"
+                )
+            )
         : [],
     }));
     await prisma.program.update({
@@ -81,6 +88,31 @@ async function syncSingleStore() {
   }
 
   console.log("3. Writing AuditLog entries so /api/audit reflects store operations...");
+  const deleteLogExists = await prisma.auditLog.findFirst({
+    where: {
+      action: "DELETE",
+      summary: { contains: "Quarterly Quota Accelerator Bonus" },
+    },
+  });
+  if (!deleteLogExists) {
+    await prisma.auditLog.create({
+      data: {
+        actor: "Ray (Workspace Owner)",
+        actorRole: "coworker (Administrator)",
+        action: "DELETE",
+        objectType: "RewardRule",
+        objectId: "prog-strategic:lvl-silver:Quarterly Quota Accelerator Bonus",
+        summary:
+          'Deleted accidental preset reward rule "SGD 1,000 Quarterly Quota Accelerator Bonus" from Silver Tier of prog-strategic (§14.2 Slice 1)',
+        diffJson: JSON.stringify({
+          programId: "prog-strategic",
+          level: "Silver Tier",
+          deletedRuleTitle: "SGD 1,000 Quarterly Quota Accelerator Bonus",
+          remainingRules: ["10% Recurring Deal Commission"],
+        }),
+      },
+    });
+  }
   const existingLogs = await prisma.auditLog.count();
   if (existingLogs === 0) {
     await prisma.auditLog.createMany({

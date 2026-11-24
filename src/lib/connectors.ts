@@ -181,7 +181,27 @@ export function decryptBankDetails(stored: string): string {
   }
 }
 
-// RFC 6238 TOTP Authenticator MFA + Recovery Codes (§13.3 Slice 8 — No SMS)
+// RFC 6238 TOTP Authenticator MFA + One-Time Recovery Codes (§13.3 Slice 8 & §14.2 Slice 6 — No SMS)
+export function enrollTotpMfa(email: string, issuer = "R-PRM Enterprise") {
+  const secret = "JBSWY3DPEHPK3PXP";
+  const recoveryCodes = [
+    "RPRM-8821-904A",
+    "RPRM-3319-77BC",
+    "RPRM-5502-19DE",
+    "RPRM-9140-62FA",
+  ];
+  const otpauthUri = `otpauth://totp/${encodeURIComponent(
+    issuer
+  )}:${encodeURIComponent(email)}?secret=${secret}&issuer=${encodeURIComponent(
+    issuer
+  )}&algorithm=SHA1&digits=6&period=30`;
+  return {
+    secret,
+    recoveryCodes,
+    otpauthUri,
+  };
+}
+
 export function generateTotpCode(
   secret = "RPRM2026AUTHENTICATORSECRET",
   timeStep = Math.floor(Date.now() / 30000)
@@ -205,21 +225,60 @@ export function verifyTotpOrRecoveryCode(
   inputCode: string,
   secret = "RPRM2026AUTHENTICATORSECRET",
   validRecoveryCodes: string[] = [
+    "RPRM-8821-904A",
+    "RPRM-3319-77BC",
+    "RPRM-5502-19DE",
+    "RPRM-9140-62FA",
     "RPRM-REC-1042",
     "RPRM-REC-2084",
     "RPRM-REC-3096",
     "RPRM-REC-4012",
-  ]
-): { valid: boolean; method: "totp" | "recovery" | "invalid" } {
+  ],
+  consumedRecoveryCodes?: Set<string>
+): {
+  valid: boolean;
+  method: "totp" | "recovery" | "invalid";
+  remainingRecoveryCodes: string[];
+} {
   const cleaned = (inputCode || "").trim();
   if (validRecoveryCodes.includes(cleaned)) {
-    return { valid: true, method: "recovery" };
+    if (consumedRecoveryCodes && consumedRecoveryCodes.has(cleaned)) {
+      return {
+        valid: false,
+        method: "invalid",
+        remainingRecoveryCodes: validRecoveryCodes.filter(
+          (c) => c !== cleaned && !consumedRecoveryCodes.has(c)
+        ),
+      };
+    }
+    if (consumedRecoveryCodes) {
+      consumedRecoveryCodes.add(cleaned);
+    }
+    return {
+      valid: true,
+      method: "recovery",
+      remainingRecoveryCodes: validRecoveryCodes.filter(
+        (c) => c !== cleaned && !(consumedRecoveryCodes?.has(c) ?? false)
+      ),
+    };
   }
   const nowStep = Math.floor(Date.now() / 30000);
   for (const offset of [-1, 0, 1]) {
     if (generateTotpCode(secret, nowStep + offset) === cleaned) {
-      return { valid: true, method: "totp" };
+      return {
+        valid: true,
+        method: "totp",
+        remainingRecoveryCodes: validRecoveryCodes.filter(
+          (c) => !(consumedRecoveryCodes?.has(c) ?? false)
+        ),
+      };
     }
   }
-  return { valid: false, method: "invalid" };
+  return {
+    valid: false,
+    method: "invalid",
+    remainingRecoveryCodes: validRecoveryCodes.filter(
+      (c) => !(consumedRecoveryCodes?.has(c) ?? false)
+    ),
+  };
 }

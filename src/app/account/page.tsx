@@ -79,9 +79,81 @@ export default function AccountRootPage() {
     directorySubdomain: "r-cloud",
     dealExpirationDays: 90,
     dealReminderDays: 14,
-    autoPayoutSchedule: "Monthly (1st day of month)",
+    dealConflictDetection:
+      "Warn & flag duplicate Deals across Customer company or contact email domain",
+    allowDealResubmission: true,
+    autoAssociateCustomers: true,
+    dealValidationStrategy: "Anyone (Partner Owner or Administrator)",
+    acknowledgeDealTemplate: "Deal Registration Validated",
+    dealCardFields: [
+      "Deal Name",
+      "Partner Name",
+      "Amount & Currency",
+      "Probability (%)",
+      "Expected Close Date",
+      "Owner",
+      "Conflict Flag",
+    ],
+    autoPayoutEnabled: true,
+    autoPayoutSchedule: "Every month on the 1st day",
     autoPayoutThresholdSgd: 250,
   };
+
+  // Controlled Deal & Payout Settings State (hydrated from settings.account_settings)
+  const [dealConflictDetection, setDealConflictDetection] = useState(
+    acct.dealConflictDetection ||
+      "Warn & flag duplicate Deals across Customer company or contact email domain"
+  );
+  const [dealExpirationDays, setDealExpirationDays] = useState(
+    Number(acct.dealExpirationDays ?? 90)
+  );
+  const [dealReminderDays, setDealReminderDays] = useState(
+    Number(acct.dealReminderDays ?? 14)
+  );
+  const [allowDealResubmission, setAllowDealResubmission] = useState(
+    Boolean(acct.allowDealResubmission ?? true)
+  );
+  const [autoAssociateCustomers, setAutoAssociateCustomers] = useState(
+    Boolean(acct.autoAssociateCustomers ?? true)
+  );
+  const [dealValidationStrategy, setDealValidationStrategy] = useState(
+    acct.dealValidationStrategy ||
+      acct.validationStrategy ||
+      "Anyone (Partner Owner or Administrator)"
+  );
+  const [acknowledgeDealTemplate, setAcknowledgeDealTemplate] = useState(
+    acct.acknowledgeDealTemplate || "Deal Registration Validated"
+  );
+  const [autoPayoutSchedule, setAutoPayoutSchedule] = useState(
+    acct.autoPayoutSchedule || "Every month on the 1st day"
+  );
+  const [autoPayoutThresholdSgd, setAutoPayoutThresholdSgd] = useState(
+    Number(acct.autoPayoutThresholdSgd ?? 250)
+  );
+
+  React.useEffect(() => {
+    const s = settings.account_settings;
+    if (!s) return;
+    if (s.dealConflictDetection)
+      setDealConflictDetection(s.dealConflictDetection);
+    if (s.dealExpirationDays !== undefined)
+      setDealExpirationDays(Number(s.dealExpirationDays));
+    if (s.dealReminderDays !== undefined)
+      setDealReminderDays(Number(s.dealReminderDays));
+    if (s.allowDealResubmission !== undefined)
+      setAllowDealResubmission(Boolean(s.allowDealResubmission));
+    if (s.autoAssociateCustomers !== undefined)
+      setAutoAssociateCustomers(Boolean(s.autoAssociateCustomers));
+    if (s.dealValidationStrategy || s.validationStrategy)
+      setDealValidationStrategy(
+        s.dealValidationStrategy || s.validationStrategy
+      );
+    if (s.acknowledgeDealTemplate)
+      setAcknowledgeDealTemplate(s.acknowledgeDealTemplate);
+    if (s.autoPayoutSchedule) setAutoPayoutSchedule(s.autoPayoutSchedule);
+    if (s.autoPayoutThresholdSgd !== undefined)
+      setAutoPayoutThresholdSgd(Number(s.autoPayoutThresholdSgd));
+  }, [settings.account_settings]);
 
   const customProps = manageItems.filter(
     (m) => m.category === "custom_properties"
@@ -97,7 +169,21 @@ export default function AccountRootPage() {
   const handleSaveSettings = async (msg = "Settings saved to database!") => {
     await mutate(
       "SAVE_SETTING",
-      { key: "account_settings", value: acct },
+      {
+        key: "account_settings",
+        value: {
+          ...acct,
+          dealConflictDetection,
+          dealExpirationDays,
+          dealReminderDays,
+          allowDealResubmission,
+          autoAssociateCustomers,
+          dealValidationStrategy,
+          acknowledgeDealTemplate,
+          autoPayoutSchedule,
+          autoPayoutThresholdSgd,
+        },
+      },
       msg
     );
   };
@@ -625,14 +711,20 @@ export default function AccountRootPage() {
                   <label className="block font-bold text-slate-900">
                     4. Channel-conflict detection (Duplicate Deal Check)
                   </label>
-                  <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white">
-                    <option>
+                  <select
+                    value={dealConflictDetection}
+                    onChange={(e) => setDealConflictDetection(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
+                    <option value="Warn & flag duplicate Deals across Customer company or contact email domain">
                       Warn &amp; flag duplicate Deals across Customer company or contact email domain
                     </option>
-                    <option>
+                    <option value="Block partners from registering a Deal when an active protected Deal exists">
                       Block partners from registering a Deal when an active protected Deal exists
                     </option>
-                    <option>Allow duplicate deal registrations (No conflict check)</option>
+                    <option value="Allow duplicate deal registrations (No conflict check)">
+                      Allow duplicate deal registrations (No conflict check)
+                    </option>
                   </select>
                 </div>
               </div>
@@ -650,7 +742,10 @@ export default function AccountRootPage() {
                       </span>
                       <input
                         type="number"
-                        defaultValue={90}
+                        value={dealExpirationDays}
+                        onChange={(e) =>
+                          setDealExpirationDays(Number(e.target.value) || 0)
+                        }
                         className="w-full px-3 py-1.5 border border-slate-300 rounded-lg"
                       />
                     </div>
@@ -660,7 +755,10 @@ export default function AccountRootPage() {
                       </span>
                       <input
                         type="number"
-                        defaultValue={14}
+                        value={dealReminderDays}
+                        onChange={(e) =>
+                          setDealReminderDays(Number(e.target.value) || 0)
+                        }
                         className="w-full px-3 py-1.5 border border-slate-300 rounded-lg"
                       />
                     </div>
@@ -672,13 +770,25 @@ export default function AccountRootPage() {
                     6. Deal resubmission &amp; 7. Associate customers automatically
                   </label>
                   <label className="flex items-center space-x-2 pt-1">
-                    <input type="checkbox" defaultChecked />
+                    <input
+                      type="checkbox"
+                      checked={allowDealResubmission}
+                      onChange={(e) =>
+                        setAllowDealResubmission(e.target.checked)
+                      }
+                    />
                     <span className="font-medium text-slate-800">
                       Deal resubmission — Allow partners to resubmit expired or refused deals
                     </span>
                   </label>
                   <label className="flex items-center space-x-2">
-                    <input type="checkbox" defaultChecked />
+                    <input
+                      type="checkbox"
+                      checked={autoAssociateCustomers}
+                      onChange={(e) =>
+                        setAutoAssociateCustomers(e.target.checked)
+                      }
+                    />
                     <span className="font-medium text-slate-800">
                       Associate customers automatically — Link or create Customer when Deal closes won
                     </span>
@@ -689,10 +799,20 @@ export default function AccountRootPage() {
                   <label className="block font-bold text-slate-900 mb-1">
                     8. Validation strategy
                   </label>
-                  <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white">
-                    <option>Anyone (Partner Owner or Administrator)</option>
-                    <option>Dedicated Partner Owner only</option>
-                    <option>Workspace Administrators only</option>
+                  <select
+                    value={dealValidationStrategy}
+                    onChange={(e) => setDealValidationStrategy(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
+                    <option value="Anyone (Partner Owner or Administrator)">
+                      Anyone (Partner Owner or Administrator)
+                    </option>
+                    <option value="Dedicated Partner Owner only">
+                      Dedicated Partner Owner only
+                    </option>
+                    <option value="Workspace Administrators only">
+                      Workspace Administrators only
+                    </option>
                   </select>
                 </div>
 
@@ -700,7 +820,11 @@ export default function AccountRootPage() {
                   <label className="block font-bold text-slate-900 mb-1">
                     9. Acknowledge deal registrations (Email Template)
                   </label>
-                  <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white">
+                  <select
+                    value={acknowledgeDealTemplate}
+                    onChange={(e) => setAcknowledgeDealTemplate(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  >
                     {emailTemplates.map((t) => (
                       <option key={t.id} value={t.name}>
                         Template: {t.name}
@@ -734,16 +858,27 @@ export default function AccountRootPage() {
                   </label>
                   <label className="block text-slate-600">
                     Schedule:
-                    <select className="w-full mt-1 px-3 py-1.5 border border-slate-300 rounded-lg bg-white">
-                      <option>Every month on the 1st day</option>
-                      <option>Every quarter on the 1st day</option>
+                    <select
+                      value={autoPayoutSchedule}
+                      onChange={(e) => setAutoPayoutSchedule(e.target.value)}
+                      className="w-full mt-1 px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
+                    >
+                      <option value="Every month on the 1st day">
+                        Every month on the 1st day
+                      </option>
+                      <option value="Every quarter on the 1st day">
+                        Every quarter on the 1st day
+                      </option>
                     </select>
                   </label>
                   <label className="block text-slate-600">
                     Minimum payout threshold (SGD):
                     <input
                       type="number"
-                      defaultValue={250}
+                      value={autoPayoutThresholdSgd}
+                      onChange={(e) =>
+                        setAutoPayoutThresholdSgd(Number(e.target.value) || 0)
+                      }
                       className="w-full mt-1 px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                     />
                   </label>

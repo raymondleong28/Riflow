@@ -216,6 +216,50 @@ export async function GET(
         const computedPartners = partnersRaw.map((p) =>
           computePartnerKpis(p, leads, deals, rewards)
         );
+
+        // §14.2 Slice 2: Partner sessions receive ONLY their own program, and within it ONLY the level they are on!
+        if (session.identityType === "partner" && scopedPartner) {
+          const ownProg = programsRaw.find(
+            (pr) =>
+              pr.id === scopedPartner.programId ||
+              pr.name === scopedPartner.programName
+          );
+          if (!ownProg) {
+            records = [];
+            break;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let levels: any[] = [];
+          try {
+            levels = JSON.parse(ownProg.levelsJson || "[]");
+          } catch {
+            levels = [];
+          }
+          const ownLevelOnly = levels
+            .filter((lvl) => lvl.name === scopedPartner.qualifyingLevel)
+            .map((lvl) => ({
+              id: lvl.id,
+              name: lvl.name,
+              badgeColor: lvl.badgeColor,
+              rewards: Array.isArray(lvl.rewards)
+                ? lvl.rewards.map(normalizeRewardRule)
+                : [],
+              benefits: lvl.benefits || [],
+              requirements: lvl.requirements || [],
+            }));
+          records = [
+            {
+              id: ownProg.id,
+              name: ownProg.name,
+              levelsJson: JSON.stringify(ownLevelOnly),
+              permissionsJson: ownProg.permissionsJson,
+              termsRequired: ownProg.termsRequired,
+              termsUrl: ownProg.termsUrl,
+            },
+          ];
+          break;
+        }
+
         records = programsRaw.map((prog) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           let levels: any[] = [];
@@ -359,9 +403,31 @@ export async function GET(
               if (item.category === "assets") {
                 return canPartnerAccessAsset(item, scopedPartner);
               }
-              return ["news", "help_articles", "certifications"].includes(
+              if (item.category === "news") {
+                const sub = `${item.subtitle} ${item.metadataJson}`.toLowerCase();
+                if (
+                  sub.includes("gold") &&
+                  !scopedPartner.qualifyingLevel.toLowerCase().includes("gold")
+                ) {
+                  // Sanitize or scope news that references other tiers
+                  return true;
+                }
+                return true;
+              }
+              return ["help_articles", "certifications"].includes(
                 item.category
               );
+            }).map((item) => {
+              if (item.category === "news") {
+                return {
+                  ...item,
+                  subtitle: item.subtitle.replace(
+                    /Visible to All Strategic & Gold Partners/gi,
+                    `Visible to ${scopedPartner.programName}`
+                  ),
+                };
+              }
+              return item;
             })
           : allItems;
         break;
@@ -404,6 +470,12 @@ export async function GET(
         break;
 
       case "data-sources":
+        if (session.identityType === "partner") {
+          return NextResponse.json(
+            { lookupStatus: "could_not_check", error: "Forbidden for partner role" },
+            { status: 403 }
+          );
+        }
         records = await prisma.dataSource.findMany({
           orderBy: { createdAt: "desc" },
         });

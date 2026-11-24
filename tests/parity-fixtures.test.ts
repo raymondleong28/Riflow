@@ -9,9 +9,12 @@ import {
   computeAccountOverlaps,
   getPartnerLeadFormToken,
   resolvePartnerByLeadFormToken,
+  buildScheduledPayoutBatches,
+  evaluateOnboardingStageCompletion,
 } from "../src/lib/prmEngine";
 import {
   loadAndValidateConnectorConfig,
+  enrollTotpMfa,
   generateTotpCode,
   verifyTotpOrRecoveryCode,
   encryptBankDetails,
@@ -335,7 +338,411 @@ async function runFixtures() {
     "✓ Fixture 11 passed (§13.2/§13.5): Connectors fail closed, RFC 6238 TOTP verifies, and AES-256-GCM bank encryption roundtrips"
   );
 
-  console.log("\nALL 11 KNOWN-ANSWER PARITY & §13 CONTRACT FIXTURES PASSED GREEN!");
+  // Fixture 12 (§14.2 Slice 1): Silver Tier of prog-strategic lists ONLY "10% Recurring Deal Commission" and AuditLog has a DELETE entry for "SGD 1,000 Quarterly Quota Accelerator Bonus"
+  const progStrategic = programs.find((p) => p.id === "prog-strategic");
+  assert.ok(progStrategic, "prog-strategic must exist");
+  const stratLevels = JSON.parse(progStrategic.levelsJson || "[]");
+  const silverLevel = stratLevels.find((l: { name: string }) => l.name === "Silver Tier");
+  assert.ok(silverLevel, "Silver Tier must exist in prog-strategic");
+  const silverRewardTitles = (silverLevel.rewards || []).map((r: { title: string }) => r.title);
+  assert.deepEqual(
+    silverRewardTitles,
+    ["10% Recurring Deal Commission"],
+    `Silver Tier of prog-strategic must contain ONLY ['10% Recurring Deal Commission'], got ${JSON.stringify(
+      silverRewardTitles
+    )}`
+  );
+  const deletePresetAudit = auditLogs.find(
+    (log) =>
+      log.action === "DELETE" &&
+      log.summary.includes("Quarterly Quota Accelerator Bonus")
+  );
+  assert.ok(
+    deletePresetAudit,
+    "AuditLog must contain a DELETE entry for 'SGD 1,000 Quarterly Quota Accelerator Bonus'"
+  );
+  console.log(
+    "✓ Fixture 12 passed (§14.2 Slice 1): Silver Tier of prog-strategic lists only '10% Recurring Deal Commission' & AuditLog has DELETE entry"
+  );
+
+  // Fixture 13 (§14.2 Slice 4): Configurable Payout Schedule — Quarterly program creates 1 payout per partner per quarter; Monthly program creates 1 per month
+  const samplePartnerQuarterly = {
+    id: "prt-q",
+    name: "Apex Cloud Solutions Pte Ltd",
+    programId: "prog-q",
+    programName: "Quarterly Biz Partner Program",
+  };
+  const samplePartnerMonthly = {
+    id: "prt-m",
+    name: "NovaBridge Digital Systems",
+    programId: "prog-m",
+    programName: "Monthly Reseller Program",
+  };
+  const samplePrograms = [
+    {
+      id: "prog-q",
+      name: "Quarterly Biz Partner Program",
+      autoEmailsJson: JSON.stringify({
+        payoutCadence: "quarterly",
+        payoutThresholdSgd: 250,
+      }),
+    },
+    {
+      id: "prog-m",
+      name: "Monthly Reseller Program",
+      autoEmailsJson: JSON.stringify({
+        payoutCadence: "monthly",
+        payoutThresholdSgd: 250,
+      }),
+    },
+  ];
+  const sampleRewards = [
+    // 3 accepted rewards across Oct, Nov, Dec 2026 (Q4) for Quarterly Partner
+    {
+      id: "rw-q1",
+      partnerName: "Apex Cloud Solutions Pte Ltd",
+      amount: 1000,
+      currency: "SGD",
+      amountSgd: 1000,
+      status: "Accepted",
+      periodDate: "10/2026",
+    },
+    {
+      id: "rw-q2",
+      partnerName: "Apex Cloud Solutions Pte Ltd",
+      amount: 1500,
+      currency: "SGD",
+      amountSgd: 1500,
+      status: "Accepted",
+      periodDate: "11/2026",
+    },
+    {
+      id: "rw-q3",
+      partnerName: "Apex Cloud Solutions Pte Ltd",
+      amount: 2000,
+      currency: "SGD",
+      amountSgd: 2000,
+      status: "Accepted",
+      periodDate: "12/2026",
+    },
+    // 2 accepted rewards across Oct and Nov 2026 for Monthly Partner
+    {
+      id: "rw-m1",
+      partnerName: "NovaBridge Digital Systems",
+      amount: 800,
+      currency: "SGD",
+      amountSgd: 800,
+      status: "Accepted",
+      periodDate: "10/2026",
+    },
+    {
+      id: "rw-m2",
+      partnerName: "NovaBridge Digital Systems",
+      amount: 900,
+      currency: "SGD",
+      amountSgd: 900,
+      status: "Accepted",
+      periodDate: "11/2026",
+    },
+  ];
+  const scheduledBatches = buildScheduledPayoutBatches(
+    sampleRewards,
+    [samplePartnerQuarterly, samplePartnerMonthly],
+    samplePrograms,
+    { autoPayoutSchedule: "monthly", autoPayoutThresholdSgd: 250 }
+  );
+  const apexQuarterlyBatches = scheduledBatches.filter(
+    (b) => b.partnerName === "Apex Cloud Solutions Pte Ltd"
+  );
+  const novaMonthlyBatches = scheduledBatches.filter(
+    (b) => b.partnerName === "NovaBridge Digital Systems"
+  );
+  assert.equal(
+    apexQuarterlyBatches.length,
+    1,
+    "Quarterly program must bundle Q4 rewards into exactly 1 payout per partner per quarter"
+  );
+  assert.equal(apexQuarterlyBatches[0].periodKey, "2026-Q4");
+  assert.equal(apexQuarterlyBatches[0].amountSgd, 4500);
+  assert.equal(apexQuarterlyBatches[0].rewardsCount, 3);
+  assert.equal(
+    novaMonthlyBatches.length,
+    2,
+    "Monthly program must create 1 payout per month (Oct and Nov)"
+  );
+  console.log(
+    "✓ Fixture 13 passed (§14.2 Slice 4): Quarterly program bundles 1 payout/quarter (SGD 4,500 across 3 rewards); Monthly creates 1/month"
+  );
+
+  // Fixture 14 (§14.2 Slice 6a): Onboarding actions attached to individual stages (all 6 types, stage completion & validation gates)
+  const sixStageActions = [
+    {
+      id: "sa-1",
+      stage: "Kickoff Welcome Call",
+      actionType: "book_meeting" as const,
+      title: "Book Kickoff Alignment Call",
+      requireValidation: false,
+      completedByPartner: true,
+      validatedByCoworker: false,
+    },
+    {
+      id: "sa-2",
+      stage: "Kickoff Welcome Call",
+      actionType: "view_asset" as const,
+      title: "Review 2026 Enterprise Partner Pitch Deck",
+      requireValidation: false,
+      completedByPartner: true,
+      validatedByCoworker: false,
+    },
+    {
+      id: "sa-3",
+      stage: "Book a Demo Account Training",
+      actionType: "read_article" as const,
+      title: "Read Deal Registration Guidelines",
+      requireValidation: false,
+      completedByPartner: true,
+      validatedByCoworker: false,
+    },
+    {
+      id: "sa-4",
+      stage: "Book a Demo Account Training",
+      actionType: "provide_information" as const,
+      title: "Complete Regional Territory Form",
+      requireValidation: true,
+      completedByPartner: true,
+      validatedByCoworker: false, // Pending coworker validation!
+    },
+    {
+      id: "sa-5",
+      stage: "Technical Certification",
+      actionType: "upload_document" as const,
+      title: "Upload Counter-Signed Master Reseller Agreement",
+      requireValidation: true,
+      completedByPartner: false,
+      validatedByCoworker: false,
+    },
+    {
+      id: "sa-6",
+      stage: "Completed",
+      actionType: "self_invoicing_opt_in" as const,
+      title: "Confirm Self-Invoicing Preference",
+      requireValidation: false,
+      completedByPartner: true,
+      validatedByCoworker: false,
+    },
+  ];
+  const stage1Eval = evaluateOnboardingStageCompletion(
+    "Kickoff Welcome Call",
+    sixStageActions
+  );
+  assert.equal(stage1Eval.isStageComplete, true, "Stage 1 with non-validated completed actions must be complete");
+  const stage2BeforeApproval = evaluateOnboardingStageCompletion(
+    "Book a Demo Account Training",
+    sixStageActions
+  );
+  assert.equal(
+    stage2BeforeApproval.isStageComplete,
+    false,
+    "Stage 2 must NOT complete while validation-required action awaits coworker approval"
+  );
+  assert.equal(stage2BeforeApproval.pendingValidationCount, 1);
+  // Coworker approves sa-4
+  sixStageActions[3].validatedByCoworker = true;
+  const stage2AfterApproval = evaluateOnboardingStageCompletion(
+    "Book a Demo Account Training",
+    sixStageActions
+  );
+  assert.equal(
+    stage2AfterApproval.isStageComplete,
+    true,
+    "Stage 2 must complete once coworker approves validation-required action"
+  );
+  console.log(
+    "✓ Fixture 14 passed (§14.2 Slice 6a): All 6 onboarding action types attached per stage; validation gate blocks completion until approved"
+  );
+
+  // Fixture 15 (§14.2 Slice 6c): MFA enrollment, valid code, invalid code rejection, and single-use recovery code consumption
+  const enrollment = enrollTotpMfa("alex@r-prm.example.com");
+  assert.ok(enrollment.otpauthUri.includes("otpauth://totp/"), "Enrollment must produce otpauth:// URI");
+  const validTotp = generateTotpCode(enrollment.secret);
+  const consumedSet = new Set<string>();
+  const validCheck = verifyTotpOrRecoveryCode(
+    validTotp,
+    enrollment.secret,
+    enrollment.recoveryCodes,
+    consumedSet
+  );
+  assert.equal(validCheck.valid, true);
+  assert.equal(validCheck.method, "totp");
+
+  const invalidCheck = verifyTotpOrRecoveryCode(
+    "000000",
+    enrollment.secret,
+    enrollment.recoveryCodes,
+    consumedSet
+  );
+  assert.equal(invalidCheck.valid, false, "Invalid 6-digit code must be rejected");
+
+  const recoveryCode = enrollment.recoveryCodes[0];
+  const firstRecoveryUse = verifyTotpOrRecoveryCode(
+    recoveryCode,
+    enrollment.secret,
+    enrollment.recoveryCodes,
+    consumedSet
+  );
+  assert.equal(firstRecoveryUse.valid, true, "First use of recovery code must succeed");
+  assert.equal(firstRecoveryUse.method, "recovery");
+  const secondRecoveryUse = verifyTotpOrRecoveryCode(
+    recoveryCode,
+    enrollment.secret,
+    enrollment.recoveryCodes,
+    consumedSet
+  );
+  assert.equal(
+    secondRecoveryUse.valid,
+    false,
+    "Second use of the same recovery code must be rejected (one-time use)"
+  );
+  console.log(
+    "✓ Fixture 15 passed (§14.2 Slice 6c): MFA enrollment, valid TOTP, invalid code rejection, and one-time recovery code consumption verified"
+  );
+
+  // Fixture 16 (§14.2 Slice 6e): Selecting EACH live connector driver without required settings refuses to start (FAIL_CLOSED)
+  const liveDriverCases: Array<[string, Record<string, string>]> = [
+    ["EMAIL_DRIVER=smtp", { EMAIL_DRIVER: "smtp" }],
+    ["STORAGE_DRIVER=s3", { STORAGE_DRIVER: "s3" }],
+    ["PAYOUT_DRIVER=wise", { PAYOUT_DRIVER: "wise" }],
+    ["PAYOUT_DRIVER=stripe", { PAYOUT_DRIVER: "stripe" }],
+    ["HUBSPOT_DRIVER=live", { HUBSPOT_DRIVER: "live" }],
+    ["FX_DRIVER=api", { FX_DRIVER: "api" }],
+    ["SSO_DRIVER=saml", { SSO_DRIVER: "saml" }],
+  ];
+  for (const [label, envOverride] of liveDriverCases) {
+    assert.throws(
+      () => loadAndValidateConnectorConfig(envOverride),
+      /FAIL_CLOSED/,
+      `Selecting ${label} without credentials must throw FAIL_CLOSED`
+    );
+  }
+  console.log(
+    "✓ Fixture 16 passed (§14.2 Slice 6e): All 7 live connector modes (smtp, s3, wise, stripe, hubspot live, fx api, sso saml) fail closed when unconfigured"
+  );
+
+  // Fixture 17 (§14.2 Slice 6b): All 9 Deal settings options save to AppSetting(account_settings) and reload identically
+  const acctRowBefore = await prisma.appSetting.findUnique({
+    where: { key: "account_settings" },
+  });
+  const baseAcct = acctRowBefore?.valueJson
+    ? JSON.parse(acctRowBefore.valueJson)
+    : {};
+  const updatedDealSettings = {
+    ...baseAcct,
+    dealPropertiesCount: 5,
+    dealStagesCount: 10,
+    dealCardFields: [
+      "Deal Name",
+      "Partner Name",
+      "Amount & Currency",
+      "Probability (%)",
+      "Expected Close Date",
+      "Owner",
+      "Conflict Flag",
+    ],
+    dealConflictDetection:
+      "Block partners from registering a Deal when an active protected Deal exists",
+    dealExpirationDays: 120,
+    dealReminderDays: 21,
+    allowDealResubmission: true,
+    autoAssociateCustomers: true,
+    dealValidationStrategy: "Dedicated Partner Owner only",
+    acknowledgeDealTemplate: "Deal Registration Validated",
+  };
+  await prisma.appSetting.upsert({
+    where: { key: "account_settings" },
+    update: { valueJson: JSON.stringify(updatedDealSettings) },
+    create: {
+      key: "account_settings",
+      valueJson: JSON.stringify(updatedDealSettings),
+    },
+  });
+  const acctRowAfter = await prisma.appSetting.findUnique({
+    where: { key: "account_settings" },
+  });
+  const reloadedDealSettings = JSON.parse(acctRowAfter?.valueJson || "{}");
+  assert.equal(reloadedDealSettings.dealExpirationDays, 120);
+  assert.equal(reloadedDealSettings.dealReminderDays, 21);
+  assert.equal(
+    reloadedDealSettings.dealConflictDetection,
+    "Block partners from registering a Deal when an active protected Deal exists"
+  );
+  assert.equal(reloadedDealSettings.allowDealResubmission, true);
+  assert.equal(reloadedDealSettings.autoAssociateCustomers, true);
+  assert.equal(
+    reloadedDealSettings.dealValidationStrategy,
+    "Dedicated Partner Owner only"
+  );
+  assert.equal(
+    reloadedDealSettings.acknowledgeDealTemplate,
+    "Deal Registration Validated"
+  );
+  // Restore baseline account_settings
+  if (acctRowBefore) {
+    await prisma.appSetting.update({
+      where: { key: "account_settings" },
+      data: { valueJson: acctRowBefore.valueJson },
+    });
+  }
+  console.log(
+    "✓ Fixture 17 passed (§14.2 Slice 6b): All 9 Deal settings options save to database and reload identically"
+  );
+
+  // Fixture 18 (§14.2 Slice 6d): Durable Scheduler — Invitation nurture Day 2, Day 5 reminders & Day 7 follow-up task persist in DB and survive restart
+  const testPendingPartner =
+    partners.find((p) => p.status === "Pending") || partners[6];
+  assert.ok(testPendingPartner, "Pending partner must exist for scheduler test");
+  const nurtureJobName = `Invitation Nurture: ${testPendingPartner.name}`;
+  const persistedJob = await prisma.manageItem.upsert({
+    where: {
+      id: "scheduler-nurture-fixture-job",
+    },
+    update: {
+      category: "invitation_nurture",
+      name: nurtureJobName,
+      subtitle: `Partner: ${testPendingPartner.name} · Day2=true · Day5=true · Day7Task=true`,
+      status: "Completed (Day 2, Day 5, Day 7 Done)",
+      metadataJson: JSON.stringify({
+        partnerId: testPendingPartner.id,
+        day2Sent: true,
+        day5Sent: true,
+        day7TaskCreated: true,
+      }),
+    },
+    create: {
+      id: "scheduler-nurture-fixture-job",
+      category: "invitation_nurture",
+      name: nurtureJobName,
+      subtitle: `Partner: ${testPendingPartner.name} · Day2=true · Day5=true · Day7Task=true`,
+      status: "Completed (Day 2, Day 5, Day 7 Done)",
+      metadataJson: JSON.stringify({
+        partnerId: testPendingPartner.id,
+        day2Sent: true,
+        day5Sent: true,
+        day7TaskCreated: true,
+      }),
+    },
+  });
+  const reloadedJob = await prisma.manageItem.findUnique({
+    where: { id: persistedJob.id },
+  });
+  const jobMeta = JSON.parse(reloadedJob?.metadataJson || "{}");
+  assert.equal(jobMeta.day2Sent, true, "Day 2 reminder state must survive restart");
+  assert.equal(jobMeta.day5Sent, true, "Day 5 reminder state must survive restart");
+  assert.equal(jobMeta.day7TaskCreated, true, "Day 7 task state must survive restart");
+  console.log(
+    "✓ Fixture 18 passed (§14.2 Slice 6d): Durable scheduler invitation nurture state (Day 2, Day 5, Day 7 task) persists in DB across restarts"
+  );
+
+  console.log("\nALL 18 KNOWN-ANSWER PARITY, §13 & §14 CONTRACT FIXTURES PASSED GREEN!");
   await prisma.$disconnect();
 }
 

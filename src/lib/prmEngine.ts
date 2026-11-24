@@ -613,3 +613,251 @@ export function computeAccountOverlaps(accounts: any[]) {
     };
   });
 }
+
+// §14.2 Slice 4: Configurable Payout Schedule Engine (Monthly or Quarterly per account, overridable per program)
+export type PayoutCadence = "monthly" | "quarterly";
+
+export interface PayoutScheduleConfig {
+  cadence: PayoutCadence;
+  thresholdSgd: number;
+}
+
+export interface SchedulableReward {
+  id: string;
+  rewardNumber?: string;
+  partnerName: string;
+  amount: number;
+  currency: string;
+  amountSgd: number;
+  status: string;
+  payoutNumber?: string;
+  periodDate?: string; // YYYY-MM-DD or MM/YYYY
+}
+
+export function resolvePayoutPeriodKey(
+  dateStr: string | undefined,
+  cadence: PayoutCadence
+): { periodKey: string; periodFrom: string; periodTo: string } {
+  let year = 2026;
+  let month = 11;
+  const raw = (dateStr || "2026-11-01").trim();
+  if (/^\d{2}\/\d{4}$/.test(raw)) {
+    const [m, y] = raw.split("/").map(Number);
+    month = m;
+    year = y;
+  } else if (/^\d{4}-\d{2}/.test(raw)) {
+    const [y, m] = raw.slice(0, 7).split("-").map(Number);
+    year = y;
+    month = m;
+  }
+
+  if (cadence === "quarterly") {
+    const q = Math.floor((month - 1) / 3) + 1;
+    const startMonth = (q - 1) * 3 + 1;
+    const endMonth = startMonth + 2;
+    const lastDay = [3, 12].includes(endMonth) ? 31 : 30;
+    return {
+      periodKey: `${year}-Q${q}`,
+      periodFrom: `${year}-${String(startMonth).padStart(2, "0")}-01`,
+      periodTo: `${year}-${String(endMonth).padStart(2, "0")}-${lastDay}`,
+    };
+  }
+
+  const lastDay = new Date(year, month, 0).getDate();
+  return {
+    periodKey: `${year}-${String(month).padStart(2, "0")}`,
+    periodFrom: `${year}-${String(month).padStart(2, "0")}-01`,
+    periodTo: `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`,
+  };
+}
+
+export function resolvePartnerPayoutSchedule(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  partner: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  programs: any[],
+  accountSettings?: {
+    autoPayoutSchedule?: string;
+    autoPayoutThresholdSgd?: number;
+  }
+): PayoutScheduleConfig {
+  const acctRaw = String(
+    accountSettings?.autoPayoutSchedule || "monthly"
+  ).toLowerCase();
+  const defaultCadence: PayoutCadence = acctRaw.includes("quarter")
+    ? "quarterly"
+    : "monthly";
+  const defaultThreshold = Number(
+    accountSettings?.autoPayoutThresholdSgd ?? 250
+  );
+
+  const prog = programs.find(
+    (p) => p.id === partner?.programId || p.name === partner?.programName
+  );
+  if (prog) {
+    try {
+      const autoCfg = JSON.parse(prog.autoEmailsJson || "{}");
+      if (
+        autoCfg.payoutCadence === "quarterly" ||
+        autoCfg.payoutCadence === "monthly"
+      ) {
+        return {
+          cadence: autoCfg.payoutCadence,
+          thresholdSgd: Number(autoCfg.payoutThresholdSgd ?? defaultThreshold),
+        };
+      }
+    } catch {
+      // use account default
+    }
+  }
+
+  return {
+    cadence: defaultCadence,
+    thresholdSgd: defaultThreshold,
+  };
+}
+
+export function buildScheduledPayoutBatches(
+  rewards: SchedulableReward[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  partners: any[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  programs: any[],
+  accountSettings?: {
+    autoPayoutSchedule?: string;
+    autoPayoutThresholdSgd?: number;
+  }
+) {
+  const eligible = rewards.filter(
+    (r) => r.status === "Accepted" && !r.payoutNumber
+  );
+
+  const groups: Record<
+    string,
+    {
+      partnerName: string;
+      cadence: PayoutCadence;
+      thresholdSgd: number;
+      periodKey: string;
+      periodFrom: string;
+      periodTo: string;
+      rewards: SchedulableReward[];
+    }
+  > = {};
+
+  for (const rw of eligible) {
+    const partner = partners.find((p) => p.name === rw.partnerName);
+    const sched = resolvePartnerPayoutSchedule(
+      partner,
+      programs,
+      accountSettings
+    );
+    const period = resolvePayoutPeriodKey(rw.periodDate, sched.cadence);
+    const groupKey = `${rw.partnerName}::${sched.cadence}::${period.periodKey}`;
+    if (!groups[groupKey]) {
+      groups[groupKey] = {
+        partnerName: rw.partnerName,
+        cadence: sched.cadence,
+        thresholdSgd: sched.thresholdSgd,
+        periodKey: period.periodKey,
+        periodFrom: period.periodFrom,
+        periodTo: period.periodTo,
+        rewards: [],
+      };
+    }
+    groups[groupKey].rewards.push(rw);
+  }
+
+  const batches: Array<{
+    payoutNumber: string;
+    name: string;
+    partnerName: string;
+    cadence: PayoutCadence;
+    periodKey: string;
+    periodFrom: string;
+    periodTo: string;
+    amountSgd: number;
+    rewardsCount: number;
+    rewardIds: string[];
+  }> = [];
+
+  let seq = 1;
+  for (const grp of Object.values(groups)) {
+    const totalSgd =
+      Math.round(
+        grp.rewards.reduce((s, r) => s + Number(r.amountSgd || 0), 0) * 100
+      ) / 100;
+    if (totalSgd >= grp.thresholdSgd) {
+      batches.push({
+        payoutNumber: `PO-${grp.periodKey}-${String(seq++).padStart(2, "0")}`,
+        name: `${
+          grp.cadence === "quarterly" ? "Quarterly" : "Monthly"
+        } Auto-Payout (${grp.periodKey}) · ${grp.partnerName}`,
+        partnerName: grp.partnerName,
+        cadence: grp.cadence,
+        periodKey: grp.periodKey,
+        periodFrom: grp.periodFrom,
+        periodTo: grp.periodTo,
+        amountSgd: totalSgd,
+        rewardsCount: grp.rewards.length,
+        rewardIds: grp.rewards.map((r) => r.id),
+      });
+    }
+  }
+
+  return batches;
+}
+
+// §14.2 Slice 6: Onboarding Stage Completion & Validation Gate Evaluator
+export interface StageActionRecord {
+  id: string;
+  stage: string;
+  actionType:
+    | "view_asset"
+    | "read_article"
+    | "upload_document"
+    | "provide_information"
+    | "book_meeting"
+    | "self_invoicing_opt_in";
+  title: string;
+  requireValidation: boolean;
+  completedByPartner: boolean;
+  validatedByCoworker: boolean;
+}
+
+export function evaluateOnboardingStageCompletion(
+  stage: string,
+  actions: StageActionRecord[]
+): {
+  stage: string;
+  totalActions: number;
+  completedCount: number;
+  pendingValidationCount: number;
+  isStageComplete: boolean;
+} {
+  const stageActions = actions.filter((a) => a.stage === stage);
+  let completedCount = 0;
+  let pendingValidationCount = 0;
+
+  for (const act of stageActions) {
+    if (!act.completedByPartner) {
+      continue;
+    }
+    if (act.requireValidation && !act.validatedByCoworker) {
+      pendingValidationCount++;
+      continue;
+    }
+    completedCount++;
+  }
+
+  return {
+    stage,
+    totalActions: stageActions.length,
+    completedCount,
+    pendingValidationCount,
+    isStageComplete:
+      stageActions.length > 0 &&
+      completedCount === stageActions.length &&
+      pendingValidationCount === 0,
+  };
+}

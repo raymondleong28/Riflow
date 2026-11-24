@@ -19,6 +19,9 @@
 - [ ] **BLOCKER 4 — Legal & PDPA Review:**
   - Counsel sign-off on clean-room R-PRM copy and Kiflo terms of service (§1.3).
   - Legal/DPO approval of the **Eber General Terms 7.2** PDPA prospect consent wording on `/forms/lead/[token]` and `/forms/apply/[programId]`.
+- [ ] **BLOCKER 5 — Test Accounts Disabled & `SHOW_DEV_LOGINS` Off (§14.2 Slice 5):**
+  - Ensure all synthetic test accounts (`alex@r-prm.example.com`, `sarah@r-prm.example.com`, `jordan.lee@apexcloud.example.com`, etc.) are removed or disabled before production launch.
+  - Ensure `SHOW_DEV_LOGINS` is unset / `false` and `NODE_ENV=production` so neither `/login` nor `/p/login` renders any test account hints.
 
 ---
 

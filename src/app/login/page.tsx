@@ -10,6 +10,14 @@ export default function CoworkerLoginPage() {
   const [mfaCode, setMfaCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showDevLogins, setShowDevLogins] = useState(false);
+
+  React.useEffect(() => {
+    fetch("/api/auth")
+      .then((r) => r.json())
+      .then((d) => setShowDevLogins(Boolean(d?.showDevLogins)))
+      .catch(() => setShowDevLogins(false));
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,20 +118,22 @@ export default function CoworkerLoginPage() {
           </button>
         </form>
 
-        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
-          <p className="font-bold text-slate-800">
-            Local Environment Accounts (Role assigned by database):
-          </p>
-          <p>
-            • Admin: <code>alex@r-prm.example.com</code>
-          </p>
-          <p>
-            • Member: <code>sarah@r-prm.example.com</code>
-          </p>
-          <p>
-            • Password: <code>RprmAdmin2026!</code>
-          </p>
-        </div>
+        {showDevLogins && (
+          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
+            <p className="font-bold text-slate-800">
+              Local Environment Accounts (Role assigned by database):
+            </p>
+            <p>
+              • Admin: <code>alex@r-prm.example.com</code>
+            </p>
+            <p>
+              • Member: <code>sarah@r-prm.example.com</code>
+            </p>
+            <p>
+              • Password: <code>RprmAdmin2026!</code>
+            </p>
+          </div>
+        )}
 
         <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-slate-500">
           <span className="flex items-center space-x-1">

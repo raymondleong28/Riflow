@@ -9,6 +9,14 @@ export default function PartnerPortalLoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showDevLogins, setShowDevLogins] = useState(false);
+
+  React.useEffect(() => {
+    fetch("/api/auth")
+      .then((r) => r.json())
+      .then((d) => setShowDevLogins(Boolean(d?.showDevLogins)))
+      .catch(() => setShowDevLogins(false));
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,26 +105,28 @@ export default function PartnerPortalLoginPage() {
           </button>
         </form>
 
-        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
-          <p className="font-bold text-slate-800">
-            Local Environment Partner Logins (Role assigned by database):
-          </p>
-          <p>
-            • Apex Cloud (Platinum Manager):{" "}
-            <code>jordan.lee@apexcloud.example.com</code>
-          </p>
-          <p>
-            • Apex Cloud (Sales Rep):{" "}
-            <code>darren.koh@apexcloud.example.com</code>
-          </p>
-          <p>
-            • Vanguard (Stakeholder):{" "}
-            <code>sophia@vanguardmatrix.example.com</code>
-          </p>
-          <p>
-            • Password: <code>RprmPartner2026!</code>
-          </p>
-        </div>
+        {showDevLogins && (
+          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
+            <p className="font-bold text-slate-800">
+              Local Environment Partner Logins (Role assigned by database):
+            </p>
+            <p>
+              • Apex Cloud (Platinum Manager):{" "}
+              <code>jordan.lee@apexcloud.example.com</code>
+            </p>
+            <p>
+              • Apex Cloud (Sales Rep):{" "}
+              <code>darren.koh@apexcloud.example.com</code>
+            </p>
+            <p>
+              • Vanguard (Stakeholder):{" "}
+              <code>sophia@vanguardmatrix.example.com</code>
+            </p>
+            <p>
+              • Password: <code>RprmPartner2026!</code>
+            </p>
+          </div>
+        )}
 
         <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
           <Link
