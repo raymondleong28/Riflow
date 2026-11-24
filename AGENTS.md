@@ -116,6 +116,34 @@ Every report states, per item: the exact check, the command/URL/test name, and t
 8. **`docs/GO-LIVE.md`:** true, current, and covering §5.
 9. **Not in the repository, by design:** the database contents and uploaded files. Document in `README.md` how to back up and restore both (`pg_dump`/`pg_restore`, copy of the storage folder or bucket).
 
+### 3.5 No demo or organisation values in code (added 25 Nov 2026)
+The database starts empty, but the screens still carry demo data written into the source. A fresh install would show it, and some of it produces wrong records. Demo values may exist **only** in `prisma/seed.ts` (the `demo:seed` script) and `tests/`.
+
+1. **Wrong behaviour — fix first:**
+   - Converting a lead to a deal always creates a deal of 22,000 SGD (`src/app/leads/[id]/page.tsx`) or 18,500 SGD (`src/app/leads/views/all/page.tsx`). Ask the admin for amount and currency, defaulting currency to the workspace main currency; amount has no default.
+   - "My Leads / My Deals / My Partners / My Prospects" views filter on the hard-coded owner "Alex Morgan". Filter on the signed-in user's id.
+   - The scheduler assigns tasks to "Alex Morgan" when a partner has no owner. Assign to the workspace's default owner setting, or leave unassigned and flag it.
+   - Fallback IDs `prt-1` and `prog-strategic` when a record or URL parameter is missing. Show "not found" instead (AGENTS.md §1.4: no silent defaults).
+   - The admin notification bell shows a fixed message ("New Deal Registered by Apex Cloud … SGD 36,000"). Build it from real events or remove it.
+   - The dashboard's 12-month chart labels are fixed (12/2025–11/2026). Compute the last 12 months from today in the workspace timezone.
+   - The Security tab shows a fixed "TOTP Active" badge and secret `JBSWY3DPEHPK3PXP`. Show the signed-in user's real MFA status; display a secret only during enrolment.
+2. **Demo and organisation names in code** — remove from `src/`; take them from settings or leave fields empty:
+   - "R-Cloud …", "Eber", "Eber / R-Cloud Enterprise Pte Ltd" (payout invoice issuer), "Alex Morgan", "Apex Cloud Solutions Pte Ltd", "NovaBridge", "Meridian", "Vanguard", "Platinum Elite", "Silver Tier", demo customer and company names in sample text.
+   - Organisation name, legal entity and address on invoices → Account defaults / self-invoicing settings.
+   - Lead-form consent text ("Eber General Terms 7.2") → a workspace setting holding the consent wording and terms link; the checkbox stays required.
+   - Email template bodies and sign-offs → use merge fields (`{{workspace.name}}`), no organisation names.
+   - Form placeholders may show generic examples ("Acme Ltd") but never prefill values.
+   - "Load Eber Commission Fixture Template" on the program page → rename to "Load commission template" and move the three templates into data the admin can edit, not product text.
+3. **Currency:** replace hard-coded `"SGD"` defaults with the workspace main currency. Rename `amountSgd` columns to `amountBase` (migration; update code, tests, seed).
+4. **Schema defaults:** remove demo defaults in `prisma/schema.prisma` ("R-Cloud Strategic Partner", "Strategic Partner", "All Strategic Partners", "Sum of deals closed won" if it is a demo value); fields become optional with no default or a neutral enum value.
+5. **Check (must print nothing):**
+   ```bash
+   grep -rnE "R-Cloud|Eber|Alex Morgan|Apex|NovaBridge|Meridian|Vanguard|Synthetix|Platinum Elite|Silver Tier|Gold Tier|prog-strategic|prt-1|JBSWY3DP" src prisma/schema.prisma
+   grep -rn '"SGD"' src
+   ```
+   The setup screen's currency list may contain "SGD" as one option among others; exclude that file from the second check and say so in the report.
+6. **Done when:** empty database → `/setup` with workspace "Test Co" in MYR → every screen shows "Test Co", MYR and honest empty states; nothing mentions a demo record; converting a lead asks for an amount.
+
 ---
 
 ## 4. Product outline (for `docs/PRODUCT.md`)
@@ -171,4 +199,8 @@ Every report states, per item: the exact check, the command/URL/test name, and t
 | Money columns | Integer minor units |
 | `.env.example` vs settings read in code | Every setting listed |
 | `main` branch | Unchanged by the agent |
+| §3.5 checks (demo/organisation names, `"SGD"`) | Nothing found |
+| Fresh workspace "Test Co" in MYR | Every screen shows Test Co and MYR; no demo names; chart months end at the current month |
+| Convert lead to deal | Asks for amount; no fixed value |
+| `develop` on GitHub | Pushed; matches the local branch |
 | Everything in §2 | Still passing |
