@@ -14,7 +14,6 @@ export default function PartnerPortalLoginPage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [showDevLogins, setShowDevLogins] = useState(false);
   const [branding, setBranding] = useState({
     accountName: "R-PRM",
     logoText: "R",
@@ -30,10 +29,9 @@ export default function PartnerPortalLoginPage() {
           window.location.href = "/setup";
           return;
         }
-        setShowDevLogins(Boolean(d?.showDevLogins));
         if (d?.branding) setBranding(d.branding);
       })
-      .catch(() => setShowDevLogins(false));
+      .catch(() => {});
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -166,36 +164,8 @@ export default function PartnerPortalLoginPage() {
           </button>
         </form>
 
-        {showDevLogins && (
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
-            <p className="font-bold text-slate-800">
-              Local Environment Partner Logins (Role assigned by database):
-            </p>
-            <p>
-              • Apex Cloud (Platinum Manager):{" "}
-              <code>jordan.lee@apexcloud.example.com</code>
-            </p>
-            <p>
-              • Apex Cloud (Sales Rep):{" "}
-              <code>darren.koh@apexcloud.example.com</code>
-            </p>
-            <p>
-              • Vanguard (Stakeholder):{" "}
-              <code>sophia@vanguardmatrix.example.com</code>
-            </p>
-            <p>
-              • Password: configured via <code>SEED_PARTNER_PASSWORD</code> in <code>.env</code>
-            </p>
-          </div>
-        )}
-
-        <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-          <Link
-            href="/forms/apply/prog-strategic"
-            className="text-blue-600 font-semibold hover:underline"
-          >
-            Apply to Become a Partner →
-          </Link>
+        <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-slate-500">
+          <span>Invited partners receive an activation link by email.</span>
           <Link href="/login" className="text-slate-400 hover:text-slate-600">
             Coworker Sign In
           </Link>

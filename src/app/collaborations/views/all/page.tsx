@@ -14,10 +14,23 @@ export default function CollaborationsListPage() {
 
   const [form, setForm] = useState({
     name: "",
-    partnerName: "Apex Cloud Solutions Pte Ltd",
-    assignedContact: "Jordan Lee",
-    accountName: "Aura Luxury Hospitality Group",
+    partnerName: "",
+    assignedContact: "",
+    accountName: "",
   });
+
+  const openModal = () => {
+    const firstPartner = partners[0];
+    setForm({
+      name: "",
+      partnerName: firstPartner?.name || "",
+      assignedContact: firstPartner
+        ? `${firstPartner.contactFirstName} ${firstPartner.contactLastName}`.trim()
+        : "",
+      accountName: accounts[0]?.accountName || "",
+    });
+    setModalOpen(true);
+  };
 
   const filtered = collaborations.filter((c) => {
     if (activeView === "New Collaborations" && c.status !== "New") return false;
@@ -42,7 +55,6 @@ export default function CollaborationsListPage() {
       `Co-selling collaboration "${form.name}" launched!`
     );
     setModalOpen(false);
-    setForm({ ...form, name: "" });
   };
 
   return (
@@ -56,7 +68,7 @@ export default function CollaborationsListPage() {
         search={search}
         onSearchChange={setSearch}
         primaryActionLabel="New collaboration"
-        onPrimaryAction={() => setModalOpen(true)}
+        onPrimaryAction={openModal}
       />
 
       <div className="max-w-[1440px] mx-auto px-6 py-5">
@@ -77,19 +89,22 @@ export default function CollaborationsListPage() {
               {filtered.map((c) => (
                 <tr key={c.id} className="hover:bg-blue-50/40">
                   <td className="py-3 px-4 font-bold text-blue-700">
-                    <Link href={`/collaborations/${c.id}`} className="hover:underline">
+                    <Link
+                      href={`/collaborations/${c.id}`}
+                      className="hover:underline"
+                    >
                       {c.name}
                     </Link>
                   </td>
                   <td className="py-3 px-3">
                     <StatusBadge status={c.status} />
                   </td>
-                  <td className="py-3 px-3 text-slate-700">{c.owner}</td>
+                  <td className="py-3 px-3 text-slate-700">{c.owner || "—"}</td>
                   <td className="py-3 px-3 font-medium text-blue-700">
                     {c.partnerName}
                   </td>
                   <td className="py-3 px-3 text-slate-600">
-                    {c.assignedContact}
+                    {c.assignedContact || "—"}
                   </td>
                   <td className="py-3 px-3 font-semibold text-slate-900">
                     {c.accountName}
@@ -125,21 +140,32 @@ export default function CollaborationsListPage() {
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g. Executive Intro & Joint Solution Demo"
+                  placeholder="Executive Intro & Joint Demo"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
               <div>
                 <label className="block font-medium text-slate-700 mb-1">
-                  Partner
+                  Partner *
                 </label>
                 <select
+                  required
                   value={form.partnerName}
-                  onChange={(e) =>
-                    setForm({ ...form, partnerName: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const p = partners.find(
+                      (pt) => pt.name === e.target.value
+                    );
+                    setForm({
+                      ...form,
+                      partnerName: e.target.value,
+                      assignedContact: p
+                        ? `${p.contactFirstName} ${p.contactLastName}`.trim()
+                        : form.assignedContact,
+                    });
+                  }}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
+                  <option value="">Select partner...</option>
                   {partners.map((p) => (
                     <option key={p.id} value={p.name}>
                       {p.name}
@@ -149,21 +175,34 @@ export default function CollaborationsListPage() {
               </div>
               <div>
                 <label className="block font-medium text-slate-700 mb-1">
-                  Target Account
+                  Target Account *
                 </label>
-                <select
-                  value={form.accountName}
-                  onChange={(e) =>
-                    setForm({ ...form, accountName: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                >
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.accountName}>
-                      {a.accountName}
-                    </option>
-                  ))}
-                </select>
+                {accounts.length > 0 ? (
+                  <select
+                    required
+                    value={form.accountName}
+                    onChange={(e) =>
+                      setForm({ ...form, accountName: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  >
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.accountName}>
+                        {a.accountName}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    required
+                    value={form.accountName}
+                    onChange={(e) =>
+                      setForm({ ...form, accountName: e.target.value })
+                    }
+                    placeholder="Acme Ltd"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                )}
               </div>
             </div>
             <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">

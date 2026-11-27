@@ -4,24 +4,51 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { EntityListToolbar, StatusBadge } from "@/components/SharedEngines";
+import { currentIsoDateInTimezone } from "@/lib/prmEngine";
 import { X } from "lucide-react";
 
 export default function TasksListPage() {
-  const { tasks, partners, mutate } = usePrm();
+  const { tasks, partners, manageItems, session, settings, mutate } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
 
+  const acct = settings?.account_settings || {};
+  const coworkers = manageItems.filter((m) => m.category === "team");
+  const assigneeOptions = Array.from(
+    new Set(
+      [
+        session?.name,
+        acct.defaultOwnerName,
+        ...coworkers.map((c) => c.name),
+      ].filter(Boolean) as string[]
+    )
+  );
+
   const [form, setForm] = useState({
     name: "",
-    dueDate: "2026-12-01",
-    dueTime: "08:00 AM",
+    dueDate: "",
+    dueTime: "09:00 AM",
     type: "Follow-up",
-    assignedTo: "Alex Morgan",
+    assignedTo: "",
     associationType: "Partner",
-    associationName: "Apex Cloud Solutions Pte Ltd",
+    associationName: "",
     description: "",
   });
+
+  const openModal = () => {
+    setForm({
+      name: "",
+      dueDate: currentIsoDateInTimezone(acct.timezone),
+      dueTime: "09:00 AM",
+      type: "Follow-up",
+      assignedTo: session?.name || assigneeOptions[0] || "",
+      associationType: "Partner",
+      associationName: partners[0]?.name || "",
+      description: "",
+    });
+    setModalOpen(true);
+  };
 
   const filtered = tasks.filter((t) => {
     if (activeView !== "All" && t.status !== activeView) return false;
@@ -40,7 +67,6 @@ export default function TasksListPage() {
     e.preventDefault();
     await mutate("CREATE_TASK", form, `Task "${form.name}" created!`);
     setModalOpen(false);
-    setForm({ ...form, name: "", description: "" });
   };
 
   return (
@@ -55,7 +81,7 @@ export default function TasksListPage() {
         onSearchChange={setSearch}
         dateFilterLabel="Due date"
         primaryActionLabel="New task"
-        onPrimaryAction={() => setModalOpen(true)}
+        onPrimaryAction={openModal}
       />
 
       <div className="max-w-[1440px] mx-auto px-6 py-5">
@@ -103,20 +129,28 @@ export default function TasksListPage() {
                         : "text-slate-900"
                     }`}
                   >
-                    <Link href={`/tasks/${t.id}`} className="hover:underline text-blue-700">
+                    <Link
+                      href={`/tasks/${t.id}`}
+                      className="hover:underline text-blue-700"
+                    >
                       {t.name}
                     </Link>
                   </td>
                   <td className="py-3 px-3 text-slate-600">{t.type}</td>
                   <td className="py-3 px-3 text-slate-700">
-                    {t.dueDate} · {t.dueTime}
+                    {t.dueDate}
+                    {t.dueTime ? ` · ${t.dueTime}` : ""}
                   </td>
                   <td className="py-3 px-3 text-slate-500 max-w-xs truncate">
                     {t.description}
                   </td>
-                  <td className="py-3 px-3 text-slate-700">{t.assignedTo}</td>
+                  <td className="py-3 px-3 text-slate-700">
+                    {t.assignedTo || "Unassigned"}
+                  </td>
                   <td className="py-3 px-3 font-medium text-blue-700">
-                    {t.associationType}: {t.associationName}
+                    {t.associationName
+                      ? `${t.associationType}: ${t.associationName}`
+                      : "—"}
                   </td>
                   <td className="py-3 px-3 text-slate-500">{t.createdBy}</td>
                   <td className="py-3 px-3 text-slate-500">
@@ -153,7 +187,7 @@ export default function TasksListPage() {
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g. Conduct Q4 Partner Enablement Call"
+                  placeholder="Schedule partner onboarding review"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -196,9 +230,12 @@ export default function TasksListPage() {
                     }
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
-                    <option>Alex Morgan</option>
-                    <option>Sarah Jenkins</option>
-                    <option>Marcus Vance</option>
+                    <option value="">Unassigned</option>
+                    {assigneeOptions.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -212,6 +249,7 @@ export default function TasksListPage() {
                     }
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
+                    <option value="">None</option>
                     {partners.map((p) => (
                       <option key={p.id} value={p.name}>
                         {p.name}
@@ -230,6 +268,7 @@ export default function TasksListPage() {
                   onChange={(e) =>
                     setForm({ ...form, description: e.target.value })
                   }
+                  placeholder="Task notes..."
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>

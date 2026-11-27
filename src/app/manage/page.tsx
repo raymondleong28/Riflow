@@ -4,6 +4,8 @@ import React, { useState } from "react";
 import { usePrm } from "@/context/PrmContext";
 import { StatusBadge } from "@/components/SharedEngines";
 import { ManageFormState, ManageModals } from "@/components/ManageModals";
+import { ManageEmailAndHelpPanels } from "@/components/ManageEmailAndHelpPanels";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 import {
   FolderOpen,
   Award,
@@ -24,22 +26,23 @@ import {
   Download,
   Edit3,
   Trash2,
-  Send,
   Play,
   Paperclip,
+  Calculator,
 } from "lucide-react";
 
 const MANAGE_MODULES = [
   { id: "assets", title: "Assets", desc: "Upload & share docs, contracts & training videos with partners", icon: FolderOpen, cta: "Add asset" },
   { id: "certifications", title: "Certifications", desc: "Manage partner certifications, exams, validity & awards", icon: Award, cta: "New certification" },
+  { id: "commission_templates", title: "Commission templates", desc: "Create & edit reusable commission rule templates for programs", icon: Calculator, cta: "New template" },
   { id: "email_setup", title: "Email setup", desc: "Custom domain CNAMEs & environment SMTP connector status", icon: MailCheck, cta: "Email Setup" },
-  { id: "email_templates", title: "Email templates", desc: "Edit subject, merge tags, HTML body & test-send 11 templates", icon: FileText, cta: "Add a new template" },
-  { id: "groups", title: "Groups", desc: "Segment partners, assign members & compare 14 KPIs", icon: Users, cta: "Add a new group" },
+  { id: "email_templates", title: "Email templates", desc: "Edit subject, merge tags, body & test-send templates", icon: FileText, cta: "Add a new template" },
+  { id: "groups", title: "Groups", desc: "Segment partners, assign members & compare live KPIs", icon: Users, cta: "Add a new group" },
   { id: "help_articles", title: "Help Center", desc: "Manage Partner Portal Articles & Collections with attachments", icon: BookOpen, cta: "Add article" },
-  { id: "integrations", title: "Integrations", desc: "Configure API keys, webhooks & sync for 14 integrations", icon: Puzzle, cta: "Add custom integration" },
+  { id: "integrations", title: "Integrations", desc: "Configure API keys, webhooks & sync connectors", icon: Puzzle, cta: "Add custom integration" },
   { id: "news", title: "News", desc: "Publish announcements & attachments to the Partner Portal", icon: Newspaper, cta: "Add news" },
   { id: "partner_dashboards", title: "Partner dashboards", desc: "Configure widgets & layout for the Partner Portal", icon: LayoutDashboard, cta: "New dashboard" },
-  { id: "directories", title: "Partner directories", desc: "Configure & preview your public searchable partner directory", icon: Globe, cta: "Add directory profile" },
+  { id: "directories", title: "Partner directories", desc: "Configure & preview your searchable partner directory", icon: Globe, cta: "Add directory profile" },
   { id: "onboarding_pipelines", title: "Partner onboarding", desc: "Build & edit multi-stage onboarding Kanban pipelines", icon: GitBranch, cta: "New pipeline" },
   { id: "products", title: "Products", desc: "Manage product SKUs, pricing & spec sheets for deal line items", icon: Package, cta: "Add new product" },
   { id: "team", title: "Team", desc: "Invite & edit internal coworkers, roles & email invites", icon: UserCheck, cta: "Add coworker" },
@@ -56,12 +59,8 @@ function parseMeta(jsonStr?: string): Record<string, any> {
   }
 }
 
-function normalizeFileUrl(url?: string, fallbackName?: string): string {
-  if (!url) {
-    return fallbackName?.includes("Agreement")
-      ? "/api/files/Master_Reseller_Agreement_Template.txt"
-      : "/api/files/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
-  }
+function normalizeFileUrl(url?: string): string {
+  if (!url) return "";
   if (url.startsWith("/uploads/")) {
     return `/api/files/${url.replace(/^\/uploads\//, "")}`;
   }
@@ -69,15 +68,31 @@ function normalizeFileUrl(url?: string, fallbackName?: string): string {
 }
 
 export default function ManageHubPage() {
-  const { manageItems, partners, programs, settings, mutate, showToast, refresh } = usePrm();
+  const {
+    manageItems,
+    partners,
+    programs,
+    leads,
+    deals,
+    settings,
+    session,
+    mutate,
+    showToast,
+    refresh,
+  } = usePrm();
   const [selectedTool, setSelectedTool] = useState<string>("assets");
-
   const [assetFolder, setAssetFolder] = useState<string>("All");
-  const [helpSubTab, setHelpSubTab] = useState<"Articles" | "Collections">("Articles");
+  const [helpSubTab, setHelpSubTab] = useState<"Articles" | "Collections">(
+    "Articles"
+  );
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  const acct = settings?.account_settings || {};
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
+  const workspaceSlug = acct.workspaceSlug || "workspace";
 
   const [form, setForm] = useState<ManageFormState>({
     name: "",
@@ -92,23 +107,22 @@ export default function ManageHubPage() {
     validityMonths: "24",
     passingScore: "85%",
     awardedPartners: [],
-    emailSubject: "Welcome to R-PRM, {{partner.name}}!",
+    emailSubject: "Welcome to {{workspace.name}}, {{partner.name}}!",
     emailTrigger: "On partner signup",
     emailBody:
-      "Hi {{contact.first_name}},\n\nWelcome to {{program.name}}! Your partner portal is ready. Log in anytime to register deals, submit leads, and download enablement assets.\n\nBest regards,\nThe R-Cloud Channel Team",
+      "Hi {{contact.first_name}},\n\nWelcome to {{program.name}} at {{workspace.name}}! Your partner portal is ready.\n\nBest regards,\n{{workspace.name}}",
     groupPartnerIds: [],
     collection: "Getting Started for Partners",
-    articleBody:
-      "Step 1: Open your Partner Portal.\nStep 2: Navigate to Deals > Register Deal.\nStep 3: Submit client details for 90-day deal protection.",
-    apiKey: "rk_live_9928174650abcdef",
-    webhookUrl: "https://api.r-prm.example.com/webhooks/inbound",
+    articleBody: "",
+    apiKey: "",
+    webhookUrl: "",
     syncDirection: "Bi-directional (Real-time)",
-    sku: "RPRM-SKU-10",
-    priceSgd: "15000",
+    sku: "",
+    priceBase: "",
     billingCadence: "Annual License",
     coworkerEmail: "",
-    coworkerTitle: "Partner Account Manager",
-    coworkerPhone: "+65 9100 3300",
+    coworkerTitle: "",
+    coworkerPhone: "",
     coworkerRole: "Manager",
     workflowTrigger: "Deal Stage moves to Closed Won",
     workflowCondition: "status == Active",
@@ -118,43 +132,34 @@ export default function ManageHubPage() {
     conditionValue: "Active",
     actionType: "create_task",
     actionTarget: "Follow up on partner milestone",
-    pipelineStages:
-      "Kickoff Welcome Call, Book a Demo Account Training, Technical Certification, Completed",
+    pipelineStages: "Kickoff, Enablement, Active",
     dashboardWidgets: [
       "Quick Deal Registration",
       "Submit Lead Form",
       "Commission & Payout Tracker",
       "Enablement Assets Library",
-      "Certifications Progress",
-      "Referral Tracking Links",
     ],
   });
 
   const [awardModalCertId, setAwardModalCertId] = useState<string | null>(null);
-  const [selectedPartnerToAward, setSelectedPartnerToAward] = useState<string>(
-    "Apex Cloud Solutions Pte Ltd"
-  );
+  const [selectedPartnerToAward, setSelectedPartnerToAward] =
+    useState<string>("");
 
   const [notifyModalOpen, setNotifyModalOpen] = useState(false);
-  const [notifyTargetEmail, setNotifyTargetEmail] = useState(
-    "jordan.lee@apexcloud.example.com"
-  );
+  const [notifyTargetEmail, setNotifyTargetEmail] = useState("");
   const [notifyMessage, setNotifyMessage] = useState(
-    "We have uploaded new 2026 Partner Enablement assets and pitch decks to your Partner Portal."
+    "New enablement assets are now available in your {{workspace.name}} Partner Portal."
   );
 
-  // Email Setup State (S12: credentials live only in server env, never stored in AppSetting)
   const emailConnectorStatus = settings.email_connector_status || {
     driver: "local",
     smtpConfigured: false,
     smtpHost: null,
     smtpPort: null,
   };
-  const [emailDomain, setEmailDomain] = useState("@partners.r-cloud.co");
-  const [emailPrefix, setEmailPrefix] = useState("alliances");
-  const [testEmailRecipient, setTestEmailRecipient] = useState(
-    "jordan.lee@apexcloud.example.com"
-  );
+  const [emailDomain, setEmailDomain] = useState(`@${workspaceSlug}.local`);
+  const [emailPrefix, setEmailPrefix] = useState("partners");
+  const [testEmailRecipient, setTestEmailRecipient] = useState("");
 
   const activeMod =
     MANAGE_MODULES.find((m) => m.id === selectedTool) || MANAGE_MODULES[0];
@@ -176,7 +181,14 @@ export default function ManageHubPage() {
       fileUrl: "",
       fileSize: "",
       mimeType: "",
+      sku: "",
+      priceBase: "",
       coworkerEmail: "",
+      coworkerTitle: "",
+      coworkerPhone: "",
+      apiKey: "",
+      webhookUrl: "",
+      articleBody: "",
       conditionField: "status",
       conditionOperator: "equals",
       conditionValue: "Active",
@@ -197,19 +209,17 @@ export default function ManageHubPage() {
       name: item.name || "",
       subtitle: item.subtitle || "",
       status: item.status || "Active",
-      fileName:
-        meta.fileName || (item.category === "assets" ? `${item.name}.pdf` : ""),
-      fileUrl: normalizeFileUrl(meta.fileUrl, item.name),
-      fileSize: meta.fileSize || "2.4 MB",
-      mimeType: meta.mimeType || "application/pdf",
+      fileName: meta.fileName || "",
+      fileUrl: normalizeFileUrl(meta.fileUrl),
+      fileSize: meta.fileSize || "",
+      mimeType: meta.mimeType || "",
       folder: meta.folder || "Sales Collateral",
       programVisibility: meta.programVisibility || "All Programs",
       validityMonths: String(meta.validityMonths || "24"),
       passingScore: meta.passingScore || "85%",
-      awardedPartners: meta.awardedPartners || [
-        "Apex Cloud Solutions Pte Ltd",
-        "NovaBridge Digital Systems",
-      ],
+      awardedPartners: Array.isArray(meta.awardedPartners)
+        ? meta.awardedPartners
+        : [],
       emailSubject:
         meta.emailSubject ||
         item.subtitle?.replace(/^Subject:\s*/i, "") ||
@@ -217,24 +227,21 @@ export default function ManageHubPage() {
       emailTrigger: meta.trigger || "On partner lifecycle event",
       emailBody:
         meta.emailBody ||
-        `Hi {{contact.first_name}},\n\nThis is an automated notification for "${item.name}".\n\nLog into your R-PRM Partner Portal to view full details.\n\nBest,\nR-Cloud Partner Team`,
+        `Hi {{contact.first_name}},\n\nThis is an automated notification for "${item.name}".\n\nBest regards,\n{{workspace.name}}`,
       groupPartnerIds: partners
         .filter((p) => p.groupName === item.name)
         .map((p) => p.id),
       collection: meta.collection || "Getting Started for Partners",
-      articleBody:
-        meta.articleBody ||
-        `Full guide for "${item.name}". Follow the checklist in your Partner Portal and download the attached reference worksheet below.`,
-      apiKey: meta.apiKey || "rk_live_9928174650abcdef",
-      webhookUrl:
-        meta.webhookUrl || "https://api.r-prm.example.com/webhooks/sync",
+      articleBody: meta.articleBody || "",
+      apiKey: meta.apiKey || "",
+      webhookUrl: meta.webhookUrl || "",
       syncDirection: meta.syncDirection || "Bi-directional (Real-time)",
-      sku: meta.sku || "RPRM-ENT-01",
-      priceSgd: String(meta.priceSgd || "24000"),
+      sku: meta.sku || "",
+      priceBase: String(meta.priceBase ?? meta.price ?? ""),
       billingCadence: meta.billingCadence || "Annual License",
-      coworkerEmail: meta.email || "coworker@r-prm.example.com",
-      coworkerTitle: meta.jobTitle || "Partner Account Manager",
-      coworkerPhone: meta.phone || "+65 9100 2200",
+      coworkerEmail: meta.email || "",
+      coworkerTitle: meta.jobTitle || "",
+      coworkerPhone: meta.phone || "",
       coworkerRole: meta.role || item.status || "Manager",
       workflowTrigger: meta.trigger || "Deal Stage moves to Closed Won",
       workflowCondition: meta.condition || "status == Active",
@@ -246,13 +253,15 @@ export default function ManageHubPage() {
       actionTarget: sa.target || item.name,
       pipelineStages: Array.isArray(meta.stages)
         ? meta.stages.join(", ")
-        : "Kickoff Welcome Call, Book a Demo Account Training, Technical Certification, Completed",
-      dashboardWidgets: meta.dashboardWidgets || [
-        "Quick Deal Registration",
-        "Submit Lead Form",
-        "Commission & Payout Tracker",
-        "Enablement Assets Library",
-      ],
+        : "Kickoff, Enablement, Active",
+      dashboardWidgets: Array.isArray(meta.dashboardWidgets)
+        ? meta.dashboardWidgets
+        : [
+            "Quick Deal Registration",
+            "Submit Lead Form",
+            "Commission & Payout Tracker",
+            "Enablement Assets Library",
+          ],
     });
     setModalOpen(true);
   };
@@ -305,23 +314,27 @@ export default function ManageHubPage() {
 
     let computedSubtitle = form.subtitle;
     if (selectedTool === "assets") {
-      computedSubtitle = `${form.folder} · ${form.fileSize || "1.8 MB"} · ${
-        form.programVisibility
-      }${form.fileName ? ` · Attached: ${form.fileName}` : ""}`;
+      computedSubtitle = `${form.folder}${
+        form.fileSize ? ` · ${form.fileSize}` : ""
+      } · ${form.programVisibility}${
+        form.fileName ? ` · Attached: ${form.fileName}` : ""
+      }`;
     } else if (selectedTool === "certifications") {
       computedSubtitle = `Validity period: ${form.validityMonths} Months · Passing Score: ${form.passingScore} · ${form.awardedPartners.length} Certified Partners`;
     } else if (selectedTool === "email_templates") {
       computedSubtitle = `Subject: ${form.emailSubject}`;
     } else if (selectedTool === "help_articles") {
       computedSubtitle = `Collection: ${form.collection} · ${
-        form.fileName ? `Attachment: ${form.fileName}` : "Updated just now"
+        form.fileName ? `Attachment: ${form.fileName}` : "Published"
       }`;
     } else if (selectedTool === "products") {
-      computedSubtitle = `SKU: ${form.sku} · ${form.billingCadence} (SGD ${Number(
-        form.priceSgd || 0
+      computedSubtitle = `SKU: ${form.sku} · ${form.billingCadence} (${baseCurrency} ${Number(
+        form.priceBase || 0
       ).toLocaleString()})`;
     } else if (selectedTool === "team") {
-      computedSubtitle = `${form.coworkerEmail} · ${form.coworkerTitle} · ${form.coworkerPhone}`;
+      computedSubtitle = `${form.coworkerEmail}${
+        form.coworkerTitle ? ` · ${form.coworkerTitle}` : ""
+      }${form.coworkerPhone ? ` · ${form.coworkerPhone}` : ""}`;
     } else if (selectedTool === "workflows") {
       computedSubtitle = `WHEN ${form.workflowTrigger} IF ${structuredCondition.field} ${structuredCondition.operator} ${structuredCondition.value} THEN ${structuredAction.type} (${structuredAction.target})`;
     } else if (selectedTool === "onboarding_pipelines") {
@@ -334,46 +347,75 @@ export default function ManageHubPage() {
       computedSubtitle = `Widgets (${form.dashboardWidgets.length}): ${form.dashboardWidgets.join(", ")}`;
     }
 
-    const metadata = {
-      fileName: form.fileName,
-      fileUrl: normalizeFileUrl(form.fileUrl, form.name),
-      fileSize: form.fileSize || "1.8 MB",
-      mimeType: form.mimeType || "application/pdf",
-      folder: form.folder,
-      programVisibility: form.programVisibility,
-      validityMonths: Number(form.validityMonths) || 24,
-      passingScore: form.passingScore,
-      awardedPartners: form.awardedPartners,
-      emailSubject: form.emailSubject,
-      trigger:
-        selectedTool === "workflows"
-          ? form.workflowTrigger
-          : form.emailTrigger,
-      emailBody: form.emailBody,
-      collection: form.collection,
-      articleBody: form.articleBody,
-      apiKey: form.apiKey,
-      webhookUrl: form.webhookUrl,
-      syncDirection: form.syncDirection,
-      sku: form.sku,
-      priceSgd: Number(form.priceSgd) || 15000,
-      billingCadence: form.billingCadence,
-      email: form.coworkerEmail,
-      jobTitle: form.coworkerTitle,
-      phone: form.coworkerPhone,
-      role: form.coworkerRole,
-      condition: `${structuredCondition.field} ${structuredCondition.operator} ${structuredCondition.value}`,
-      action: `${structuredAction.type}: ${structuredAction.target}`,
-      structuredCondition,
-      structuredAction,
-      stages: form.pipelineStages
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-      dashboardWidgets: form.dashboardWidgets,
-      partnersCount:
-        selectedTool === "groups" ? form.groupPartnerIds.length : undefined,
-    };
+    const existingItem = editingId
+      ? items.find((it) => it.id === editingId)
+      : null;
+    const existingMeta = existingItem
+      ? parseMeta(existingItem.metadataJson)
+      : {};
+
+    const metadata =
+      selectedTool === "commission_templates"
+        ? {
+            id: existingMeta.id || `tpl-${Date.now()}`,
+            title: form.name,
+            trigger: existingMeta.trigger || "transaction_paid",
+            valueType: existingMeta.valueType || "Cash",
+            amountMode: existingMeta.amountMode || "percentage",
+            rateOrAmount: Number(existingMeta.rateOrAmount ?? 10),
+            currency: existingMeta.currency || baseCurrency,
+            duration: existingMeta.duration || "recurring",
+            startOffsetMonths: Number(existingMeta.startOffsetMonths ?? 1),
+            durationMonths: Number(existingMeta.durationMonths ?? 12),
+            rateSteps: existingMeta.rateSteps || [],
+            conditions: existingMeta.conditions || [],
+            requiresValidation: Boolean(
+              existingMeta.requiresValidation ?? true
+            ),
+            clawbackOnRefund: Boolean(existingMeta.clawbackOnRefund ?? true),
+          }
+        : {
+            fileName: form.fileName,
+            fileUrl: normalizeFileUrl(form.fileUrl),
+            fileSize: form.fileSize,
+            mimeType: form.mimeType,
+            folder: form.folder,
+            programVisibility: form.programVisibility,
+            validityMonths: Number(form.validityMonths) || 24,
+            passingScore: form.passingScore,
+            awardedPartners: form.awardedPartners,
+            emailSubject: form.emailSubject,
+            trigger:
+              selectedTool === "workflows"
+                ? form.workflowTrigger
+                : form.emailTrigger,
+            emailBody: form.emailBody,
+            collection: form.collection,
+            articleBody: form.articleBody,
+            apiKey: form.apiKey,
+            webhookUrl: form.webhookUrl,
+            syncDirection: form.syncDirection,
+            sku: form.sku,
+            priceBase: Number(form.priceBase) || 0,
+            billingCadence: form.billingCadence,
+            email: form.coworkerEmail,
+            jobTitle: form.coworkerTitle,
+            phone: form.coworkerPhone,
+            role: form.coworkerRole,
+            condition: `${structuredCondition.field} ${structuredCondition.operator} ${structuredCondition.value}`,
+            action: `${structuredAction.type}: ${structuredAction.target}`,
+            structuredCondition,
+            structuredAction,
+            stages: form.pipelineStages
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+            dashboardWidgets: form.dashboardWidgets,
+            partnersCount:
+              selectedTool === "groups"
+                ? form.groupPartnerIds.length
+                : undefined,
+          };
 
     if (editingId) {
       await mutate(
@@ -409,10 +451,13 @@ export default function ManageHubPage() {
     }
 
     if (selectedTool === "team" && !editingId && form.coworkerEmail) {
+      const inviter = session?.name || "An administrator";
       await mutate("SEND_EMAIL", {
         to: form.coworkerEmail,
-        subject: `You've been invited to R-PRM as ${form.coworkerRole}`,
-        body: `Hi ${form.name},\n\nAlex Morgan invited you to join the R-Cloud PRM internal workspace as a ${form.coworkerRole} (${form.coworkerTitle}).`,
+        subject: `You've been invited to {{workspace.name}} as ${form.coworkerRole}`,
+        body: `Hi ${form.name},\n\n${inviter} invited you to join {{workspace.name}} as a ${form.coworkerRole}${
+          form.coworkerTitle ? ` (${form.coworkerTitle})` : ""
+        }.\n\nBest regards,\n{{workspace.name}}`,
         templateName: "Coworker Invitation",
       });
     }
@@ -424,14 +469,13 @@ export default function ManageHubPage() {
   const handleAwardCertification = async (e: React.FormEvent) => {
     e.preventDefault();
     const cert = items.find((i) => i.id === awardModalCertId);
-    if (!cert) return;
+    const partnerTarget = selectedPartnerToAward || partners[0]?.name || "";
+    if (!cert || !partnerTarget) return;
     const meta = parseMeta(cert.metadataJson);
     const currentList: string[] = Array.isArray(meta.awardedPartners)
       ? meta.awardedPartners
-      : ["Apex Cloud Solutions Pte Ltd"];
-    const updatedList = Array.from(
-      new Set([...currentList, selectedPartnerToAward])
-    );
+      : [];
+    const updatedList = Array.from(new Set([...currentList, partnerTarget]));
 
     await mutate(
       "UPDATE_MANAGE_ITEM",
@@ -446,12 +490,15 @@ export default function ManageHubPage() {
           awardedPartners: updatedList,
         },
       },
-      `Awarded "${cert.name}" to ${selectedPartnerToAward}!`
+      `Awarded "${cert.name}" to ${partnerTarget}!`
     );
     setAwardModalCertId(null);
   };
 
-  const handleRunWorkflowNow = async (workflowId: string, workflowName: string) => {
+  const handleRunWorkflowNow = async (
+    workflowId: string,
+    workflowName: string
+  ) => {
     try {
       const res = await fetch("/api/scheduler", {
         method: "POST",
@@ -461,8 +508,7 @@ export default function ManageHubPage() {
       const json = await res.json();
       await refresh();
       if (json.ok) {
-        const executed = json.results?.custom_workflows?.workflowsExecuted || 0;
-        showToast(`Executed workflow "${workflowName}" via durable scheduler (${executed} run logged)!`);
+        showToast(`Executed workflow "${workflowName}" via durable scheduler!`);
       } else {
         showToast(json.error || "Failed to execute workflow");
       }
@@ -472,10 +518,15 @@ export default function ManageHubPage() {
   };
 
   const handleSendTestEmail = async () => {
+    const recipient = testEmailRecipient || session?.email || "";
+    if (!recipient) {
+      showToast("Enter a recipient email address first.");
+      return;
+    }
     const res = await mutate("SEND_EMAIL", {
-      to: testEmailRecipient,
-      subject: "R-PRM Test Email — Partner Portal & SMTP Verification",
-      body: `Hello!\n\nThis is a live test email from R-PRM (${emailPrefix}${emailDomain}).\n\nYou can click the button below to open the interactive Partner Portal.`,
+      to: recipient,
+      subject: "{{workspace.name}} Test Email — Partner Portal & SMTP Verification",
+      body: `Hello,\n\nThis is a live test email from {{workspace.name}} (${emailPrefix}${emailDomain}).\n\nBest regards,\n{{workspace.name}}`,
       templateName: "SMTP Verification Test",
       portalLink: "/p",
     });
@@ -486,19 +537,17 @@ export default function ManageHubPage() {
 
   return (
     <div className="max-w-[1440px] mx-auto px-6 py-6 space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">
-            Manage Workspace &amp; Partner Portal (14 Modules)
-          </h1>
-          <p className="text-xs text-slate-500">
-            Full Create, Edit, Private File Attachment Upload/Download, Certification Awarding &amp; Environment Email Connector
-          </p>
-        </div>
+      <div>
+        <h1 className="text-xl font-bold text-slate-900">
+          Manage Workspace &amp; Partner Portal
+        </h1>
+        <p className="text-xs text-slate-500">
+          Enablement assets, commission templates, certifications, email
+          templates, onboarding pipelines, workflows &amp; team settings
+        </p>
       </div>
 
-      {/* 14-Card Hub Selector Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 gap-3">
         {MANAGE_MODULES.map((m) => {
           const Icon = m.icon;
           const active = selectedTool === m.id;
@@ -532,7 +581,6 @@ export default function ManageHubPage() {
         })}
       </div>
 
-      {/* Active Sub-Module Workspace */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
           <div>
@@ -559,14 +607,14 @@ export default function ManageHubPage() {
                     "CREATE_MANAGE_ITEM",
                     {
                       category: "workflows",
-                      name: "Template: Auto-Create Task When Active Partner Reaches Gold",
+                      name: "Auto-Create Review Task When Partner Status Becomes Active",
                       subtitle:
-                        "WHEN Partner Properties Changed IF status equals Active THEN create_task (Schedule Executive QBR)",
+                        "WHEN Partner Properties Changed IF status equals Active THEN create_task (Schedule QBR)",
                       status: "Active",
                       metadata: {
                         trigger: "Partner Properties Changed",
                         condition: "status equals Active",
-                        action: "create_task: Schedule Executive QBR",
+                        action: "create_task: Schedule QBR",
                         structuredCondition: {
                           field: "status",
                           operator: "equals",
@@ -574,12 +622,12 @@ export default function ManageHubPage() {
                         },
                         structuredAction: {
                           type: "create_task",
-                          target: "Schedule Executive QBR",
+                          target: "Schedule QBR",
                         },
                         runs: 0,
                       },
                     },
-                    "Structured workflow created from template!"
+                    "Structured workflow created!"
                   )
                 }
                 className="px-3 py-2 rounded-lg border border-blue-600 text-blue-700 bg-blue-50 hover:bg-blue-100 text-xs font-semibold"
@@ -599,7 +647,7 @@ export default function ManageHubPage() {
           </div>
         </div>
 
-        {/* 1. ASSETS SUB-MODULE */}
+        {/* 1. ASSETS */}
         {selectedTool === "assets" && (
           <div className="space-y-4 text-xs">
             <div className="flex flex-wrap items-center gap-2">
@@ -645,11 +693,8 @@ export default function ManageHubPage() {
                     })
                     .map((item) => {
                       const meta = parseMeta(item.metadataJson);
-                      const fileUrl = normalizeFileUrl(meta.fileUrl, item.name);
-                      const fileName =
-                        meta.fileName ||
-                        fileUrl.split("/").pop() ||
-                        "Attachment.pdf";
+                      const fileUrl = normalizeFileUrl(meta.fileUrl);
+                      const fileName = meta.fileName || item.name;
                       return (
                         <tr key={item.id} className="hover:bg-blue-50/30">
                           <td className="py-3 px-4">
@@ -664,19 +709,23 @@ export default function ManageHubPage() {
                             {meta.folder || "Sales Collateral"}
                           </td>
                           <td className="py-3 px-3">
-                            <a
-                              href={fileUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              download={fileName}
-                              className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold border border-blue-200"
-                            >
-                              <Paperclip className="w-3.5 h-3.5" />
-                              <span className="truncate max-w-[180px]">
-                                {fileName}
-                              </span>
-                              <Download className="w-3.5 h-3.5 ml-1" />
-                            </a>
+                            {fileUrl ? (
+                              <a
+                                href={fileUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                download={fileName}
+                                className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold border border-blue-200"
+                              >
+                                <Paperclip className="w-3.5 h-3.5" />
+                                <span className="truncate max-w-[180px]">
+                                  {fileName}
+                                </span>
+                                <Download className="w-3.5 h-3.5 ml-1" />
+                              </a>
+                            ) : (
+                              <span className="text-slate-400">No file</span>
+                            )}
                           </td>
                           <td className="py-3 px-3 text-slate-600">
                             {meta.programVisibility || "All Programs"}
@@ -685,16 +734,6 @@ export default function ManageHubPage() {
                             <StatusBadge status={item.status} />
                           </td>
                           <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
-                            <a
-                              href={fileUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              download={fileName}
-                              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded border border-slate-300 hover:bg-slate-100 text-slate-700 font-semibold"
-                            >
-                              <Download className="w-3 h-3" />
-                              <span>Download</span>
-                            </a>
                             <button
                               onClick={() => openEditModal(item)}
                               className="inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold"
@@ -711,7 +750,6 @@ export default function ManageHubPage() {
                                 )
                               }
                               className="inline-flex items-center px-2 py-1 rounded text-slate-400 hover:text-red-600"
-                              title="Delete asset"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -725,7 +763,7 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 2. CERTIFICATIONS SUB-MODULE */}
+        {/* 2. CERTIFICATIONS */}
         {selectedTool === "certifications" && (
           <div className="border border-slate-200 rounded-xl overflow-x-auto text-xs">
             <table className="w-full text-left border-collapse">
@@ -734,7 +772,6 @@ export default function ManageHubPage() {
                   <th className="py-3 px-4">Certification Name</th>
                   <th className="py-3 px-3">Validity period</th>
                   <th className="py-3 px-3">Passing Score</th>
-                  <th className="py-3 px-3">Exam / Guide Attachment</th>
                   <th className="py-3 px-3">Certified Partners</th>
                   <th className="py-3 px-3">Status</th>
                   <th className="py-3 px-4 text-right">Actions</th>
@@ -745,13 +782,7 @@ export default function ManageHubPage() {
                   const meta = parseMeta(cert.metadataJson);
                   const awarded: string[] = Array.isArray(meta.awardedPartners)
                     ? meta.awardedPartners
-                    : [
-                        "Apex Cloud Solutions Pte Ltd",
-                        "NovaBridge Digital Systems",
-                      ];
-                  const fileUrl = normalizeFileUrl(meta.fileUrl, cert.name);
-                  const fileName =
-                    meta.fileName || "Certification_Study_Guide.pdf";
+                    : [];
                   return (
                     <tr key={cert.id} className="hover:bg-blue-50/30">
                       <td className="py-3.5 px-4">
@@ -767,27 +798,19 @@ export default function ManageHubPage() {
                         {meta.passingScore || "85%"}
                       </td>
                       <td className="py-3.5 px-3">
-                        <a
-                          href={fileUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          download={fileName}
-                          className="inline-flex items-center space-x-1 text-blue-600 hover:underline font-medium"
-                        >
-                          <Paperclip className="w-3.5 h-3.5" />
-                          <span>{fileName}</span>
-                        </a>
-                      </td>
-                      <td className="py-3.5 px-3">
                         <div className="flex flex-wrap gap-1">
-                          {awarded.map((pName) => (
-                            <span
-                              key={pName}
-                              className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold"
-                            >
-                              {pName}
-                            </span>
-                          ))}
+                          {awarded.length === 0 ? (
+                            <span className="text-slate-400">None yet</span>
+                          ) : (
+                            awarded.map((pName) => (
+                              <span
+                                key={pName}
+                                className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold"
+                              >
+                                {pName}
+                              </span>
+                            ))
+                          )}
                         </div>
                       </td>
                       <td className="py-3.5 px-3">
@@ -795,7 +818,10 @@ export default function ManageHubPage() {
                       </td>
                       <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
                         <button
-                          onClick={() => setAwardModalCertId(cert.id)}
+                          onClick={() => {
+                            setSelectedPartnerToAward(partners[0]?.name || "");
+                            setAwardModalCertId(cert.id);
+                          }}
                           className="px-2.5 py-1 rounded border border-blue-600 text-blue-700 hover:bg-blue-50 font-semibold"
                         >
                           + Award Partner
@@ -828,190 +854,94 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 3. EMAIL SETUP SUB-MODULE (S12: Credentials live only in server env) */}
-        {selectedTool === "email_setup" && (
-          <div className="space-y-6 text-xs">
-            <div className="p-5 rounded-xl border-2 border-blue-200 bg-blue-50/50 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h3 className="font-bold text-sm text-blue-900">
-                    Outbound Email Connector Status (Server Environment)
-                  </h3>
-                  <p className="text-slate-600">
-                    For security, SMTP passwords are never stored in database settings or returned by API responses. Configure <code>EMAIL_DRIVER</code>, <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USER</code>, and <code>SMTP_PASS</code> in server environment variables.
-                  </p>
-                </div>
-                <StatusBadge
-                  status={
-                    emailConnectorStatus.driver === "smtp" &&
-                    emailConnectorStatus.smtpConfigured
-                      ? "Active"
-                      : "Pending"
-                  }
-                />
-              </div>
+        <ManageEmailAndHelpPanels
+          selectedTool={selectedTool}
+          emailConnectorStatus={emailConnectorStatus}
+          testEmailRecipient={testEmailRecipient}
+          setTestEmailRecipient={setTestEmailRecipient}
+          handleSendTestEmail={handleSendTestEmail}
+          emailDomain={emailDomain}
+          setEmailDomain={setEmailDomain}
+          emailPrefix={emailPrefix}
+          setEmailPrefix={setEmailPrefix}
+          items={items}
+          parseMeta={parseMeta}
+          normalizeFileUrl={normalizeFileUrl}
+          openEditModal={openEditModal}
+          sessionEmail={session?.email}
+          helpSubTab={helpSubTab}
+          setHelpSubTab={setHelpSubTab}
+          mutate={mutate}
+        />
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-3.5 rounded-lg border border-blue-100">
-                <div>
-                  <span className="text-slate-500 block">EMAIL_DRIVER</span>
-                  <span className="font-bold text-slate-900 font-mono">
-                    {emailConnectorStatus.driver || "local"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">SMTP Server</span>
-                  <span className="font-bold text-slate-900 font-mono">
-                    {emailConnectorStatus.smtpConfigured
-                      ? `${emailConnectorStatus.smtpHost}:${emailConnectorStatus.smtpPort}`
-                      : "Not configured (using In-App Outbox Sandbox)"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Credentials Storage</span>
-                  <span className="font-semibold text-emerald-700">
-                    Environment-only (Redacted from API)
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-blue-200">
-                <span className="text-[11px] text-slate-600">
-                  Every outbound email is logged to the Top Bar Outbox and delivered via the configured driver.
-                </span>
-                <div className="flex items-center space-x-2">
-                  <input
-                    value={testEmailRecipient}
-                    onChange={(e) => setTestEmailRecipient(e.target.value)}
-                    placeholder="Recipient email..."
-                    className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white w-56"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSendTestEmail}
-                    className="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-semibold flex items-center space-x-1"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Send Test Email</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Custom Sending Domain & 3 CNAME Records */}
-            <div className="space-y-3">
-              <h3 className="font-bold text-sm text-slate-900">Custom Sending Domain &amp; CNAME Verification</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Custom sending domain</label>
-                  <input value={emailDomain} onChange={(e) => setEmailDomain(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg" />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Send Emails from prefix</label>
-                  <div className="flex items-center space-x-2">
-                    <input value={emailPrefix} onChange={(e) => setEmailPrefix(e.target.value)} className="flex-1 px-3 py-2 border border-slate-300 rounded-lg" />
-                    <span className="text-slate-500 font-medium">{emailDomain}</span>
-                  </div>
-                </div>
-              </div>
-              <div className="border border-slate-200 rounded-xl overflow-hidden">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                      <th className="py-2 px-4">Type</th>
-                      <th className="py-2 px-4">Host / Name</th>
-                      <th className="py-2 px-4">Value / Target</th>
-                      <th className="py-2 px-4">Validation status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {[
-                      { host: "em8412.partners.r-cloud.co", val: "u2948102.wl028.sendgrid.net" },
-                      { host: "s1._domainkey.partners.r-cloud.co", val: "s1.domainkey.u2948102.wl028.sendgrid.net" },
-                      { host: "s2._domainkey.partners.r-cloud.co", val: "s2.domainkey.u2948102.wl028.sendgrid.net" },
-                    ].map((r) => (
-                      <tr key={r.host}>
-                        <td className="py-2 px-4 font-bold text-blue-700">CNAME</td>
-                        <td className="py-2 px-4 font-mono text-slate-800">{r.host}</td>
-                        <td className="py-2 px-4 font-mono text-slate-600">{r.val}</td>
-                        <td className="py-2 px-4"><StatusBadge status="Active" /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 4. EMAIL TEMPLATES SUB-MODULE */}
-        {selectedTool === "email_templates" && (
-          <div className="border border-slate-200 rounded-xl overflow-x-auto text-xs">
-            <table className="w-full text-left border-collapse">
+        {/* 5. GROUPS (live computed figures — §1.4) */}
+        {selectedTool === "groups" && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                  <th className="py-3 px-4">Name</th>
-                  <th className="py-3 px-3">Trigger / Description</th>
-                  <th className="py-3 px-3">Subject</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 whitespace-nowrap">
+                  <th className="py-2 px-3">Name</th>
+                  <th className="py-2 px-3 text-right">Partners</th>
+                  <th className="py-2 px-3 text-right">Submitted leads</th>
+                  <th className="py-2 px-3 text-right">Converted leads</th>
+                  <th className="py-2 px-3 text-right">Registered deals</th>
+                  <th className="py-2 px-3 text-right">Won deals</th>
+                  <th className="py-2 px-3 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {items.map((tpl) => {
-                  const meta = parseMeta(tpl.metadataJson);
-                  const subject =
-                    meta.emailSubject ||
-                    tpl.subtitle?.replace(/^Subject:\s*/i, "") ||
-                    tpl.name;
+              <tbody className="divide-y divide-slate-100 whitespace-nowrap">
+                {items.map((g) => {
+                  const grpPartners = partners.filter(
+                    (p) => p.groupName === g.name
+                  );
+                  const grpPartnerNames = new Set(
+                    grpPartners.map((p) => p.name)
+                  );
+                  const grpLeads = leads.filter((l) =>
+                    grpPartnerNames.has(l.sourcePartnerName)
+                  );
+                  const grpConverted = grpLeads.filter(
+                    (l) => l.status === "Converted"
+                  );
+                  const grpDeals = deals.filter((d) =>
+                    grpPartnerNames.has(d.partnerName)
+                  );
+                  const grpWon = grpDeals.filter(
+                    (d) => d.stage === "Closed Won"
+                  );
                   return (
-                    <tr key={tpl.id} className="hover:bg-blue-50/30">
-                      <td className="py-3 px-4 font-bold text-slate-900">
-                        {tpl.name}
+                    <tr key={g.id} className="hover:bg-blue-50/40">
+                      <td className="py-2.5 px-3 font-bold text-blue-700">
+                        {g.name}
                       </td>
-                      <td className="py-3 px-3 text-slate-600">
-                        {meta.trigger || "Automated lifecycle email"}
+                      <td className="py-2.5 px-3 text-right font-semibold">
+                        {grpPartners.length}
                       </td>
-                      <td className="py-3 px-3 font-medium text-blue-700">
-                        {subject}
+                      <td className="py-2.5 px-3 text-right">
+                        {grpLeads.length}
                       </td>
-                      <td className="py-3 px-3">
-                        <StatusBadge status={tpl.status} />
+                      <td className="py-2.5 px-3 text-right">
+                        {grpConverted.length}
                       </td>
-                      <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
+                      <td className="py-2.5 px-3 text-right">
+                        {grpDeals.length}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-bold text-emerald-700">
+                        {grpWon.length}
+                      </td>
+                      <td className="py-2.5 px-3 text-right space-x-1.5">
                         <button
-                          onClick={() =>
-                            mutate(
-                              "SEND_EMAIL",
-                              {
-                                to: "jordan.lee@apexcloud.example.com",
-                                subject,
-                                body:
-                                  meta.emailBody ||
-                                  `Sample test delivery of template "${tpl.name}".`,
-                                templateName: tpl.name,
-                                portalLink: "/p",
-                              },
-                              `Sent test email "${tpl.name}" (view in Top Bar Outbox)!`
-                            )
-                          }
-                          className="px-2.5 py-1 rounded border border-blue-600 text-blue-700 hover:bg-blue-50 font-semibold inline-flex items-center space-x-1"
+                          onClick={() => openEditModal(g)}
+                          className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold"
                         >
-                          <Send className="w-3 h-3" />
-                          <span>Send Test</span>
-                        </button>
-                        <button
-                          onClick={() => openEditModal(tpl)}
-                          className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold inline-flex items-center space-x-1"
-                        >
-                          <Edit3 className="w-3 h-3" />
-                          <span>Edit Template</span>
+                          Edit &amp; Members
                         </button>
                         <button
                           onClick={() =>
                             mutate(
                               "DELETE_MANAGE_ITEM",
-                              { id: tpl.id },
-                              `Deleted email template "${tpl.name}"`
+                              { id: g.id },
+                              `Deleted group "${g.name}"`
                             )
                           }
                           className="text-slate-400 hover:text-red-600 px-1"
@@ -1027,105 +957,7 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 5. GROUPS SUB-MODULE */}
-        {selectedTool === "groups" && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 whitespace-nowrap">
-                  <th className="py-2 px-3">Name</th>
-                  <th className="py-2 px-3 text-right">Partners</th>
-                  <th className="py-2 px-3 text-right">Submitted leads</th>
-                  <th className="py-2 px-3 text-right">Refused leads % (sourced)</th>
-                  <th className="py-2 px-3 text-right">Converted leads (sourced)</th>
-                  <th className="py-2 px-3 text-right">Converted leads % (sourced)</th>
-                  <th className="py-2 px-3 text-right">Shared leads</th>
-                  <th className="py-2 px-3 text-right">Refused leads % (shared)</th>
-                  <th className="py-2 px-3 text-right">Converted leads (shared)</th>
-                  <th className="py-2 px-3 text-right">Converted leads % (shared)</th>
-                  <th className="py-2 px-3 text-right">Deals</th>
-                  <th className="py-2 px-3 text-right">Registered deals</th>
-                  <th className="py-2 px-3 text-right">Won deals</th>
-                  <th className="py-2 px-3 text-right">Won deals %</th>
-                  <th className="py-2 px-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 whitespace-nowrap">
-                {items.map((g) => {
-                  const meta = parseMeta(g.metadataJson);
-                  const livePartnersCount = partners.filter((p) => p.groupName === g.name).length;
-                  return (
-                    <tr key={g.id} className="hover:bg-blue-50/40">
-                      <td className="py-2.5 px-3 font-bold text-blue-700">{g.name}</td>
-                      <td className="py-2.5 px-3 text-right font-semibold">{livePartnersCount || meta.partnersCount || 2}</td>
-                      <td className="py-2.5 px-3 text-right">{meta.submittedLeads ?? 18}</td>
-                      <td className="py-2.5 px-3 text-right">4.5%</td>
-                      <td className="py-2.5 px-3 text-right">11</td>
-                      <td className="py-2.5 px-3 text-right font-semibold text-blue-700">{meta.convertedLeadsPct ?? "61%"}</td>
-                      <td className="py-2.5 px-3 text-right">{meta.sharedLeads ?? 8}</td>
-                      <td className="py-2.5 px-3 text-right">0%</td>
-                      <td className="py-2.5 px-3 text-right">5</td>
-                      <td className="py-2.5 px-3 text-right">62.5%</td>
-                      <td className="py-2.5 px-3 text-right">{meta.registeredDeals ?? 12}</td>
-                      <td className="py-2.5 px-3 text-right">{meta.registeredDeals ?? 12}</td>
-                      <td className="py-2.5 px-3 text-right font-bold text-emerald-700">{meta.wonDeals ?? 8}</td>
-                      <td className="py-2.5 px-3 text-right font-bold text-slate-900">{meta.wonDealsPct ?? "66.7%"}</td>
-                      <td className="py-2.5 px-3 text-right space-x-1.5">
-                        <button onClick={() => openEditModal(g)} className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold">Edit &amp; Members</button>
-                        <button onClick={() => mutate("DELETE_MANAGE_ITEM", { id: g.id }, `Deleted group "${g.name}"`)} className="text-slate-400 hover:text-red-600 px-1"><Trash2 className="w-3.5 h-3.5 inline" /></button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* 6. HELP CENTER SUB-MODULE */}
-        {selectedTool === "help_articles" && (
-          <div className="space-y-4 text-xs">
-            <div className="flex items-center space-x-2 border-b border-slate-200 pb-2">
-              {(["Articles", "Collections"] as const).map((st) => (
-                <button key={st} onClick={() => setHelpSubTab(st)} className={`px-3.5 py-1.5 rounded-lg font-semibold ${helpSubTab === st ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700"}`}>{st}</button>
-              ))}
-            </div>
-
-            {helpSubTab === "Articles" ? (
-              <div className="divide-y divide-slate-100">
-                {items.map((art) => {
-                  const meta = parseMeta(art.metadataJson);
-                  const fileUrl = normalizeFileUrl(meta.fileUrl, art.name);
-                  return (
-                    <div key={art.id} className="py-3.5 flex items-center justify-between gap-4">
-                      <div className="space-y-1">
-                        <p className="font-bold text-sm text-slate-900">{art.name}</p>
-                        <p className="text-slate-500">{art.subtitle}</p>
-                        {meta.articleBody && <p className="text-slate-600 bg-slate-50 p-2 rounded border border-slate-200 max-w-2xl">{meta.articleBody}</p>}
-                      </div>
-                      <div className="flex items-center space-x-2 shrink-0">
-                        <a href={fileUrl} target="_blank" rel="noreferrer" download className="px-2.5 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold flex items-center space-x-1"><Download className="w-3 h-3" /><span>PDF Guide</span></a>
-                        <button onClick={() => openEditModal(art)} className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold flex items-center space-x-1"><Edit3 className="w-3 h-3" /><span>Edit</span></button>
-                        <button onClick={() => mutate("DELETE_MANAGE_ITEM", { id: art.id }, `Deleted article "${art.name}"`)} className="text-slate-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {["Getting Started for Partners", "Deal Registration & Protection", "Commissions, Payouts & Billing", "Account Mapping & Co-Selling"].map((colName) => (
-                  <div key={colName} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-1">
-                    <p className="font-bold text-slate-900">{colName}</p>
-                    <p className="text-slate-500">Visible to All Active Partner Programs</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* 7. INTEGRATIONS SUB-MODULE */}
+        {/* 7. INTEGRATIONS */}
         {selectedTool === "integrations" && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
             {items.map((intItem) => {
@@ -1185,7 +1017,7 @@ export default function ManageHubPage() {
           </div>
         )}
 
-        {/* 8-14. REMAINING SUB-MODULES */}
+        {/* REMAINING SUB-MODULES (incl. commission_templates, news, products, team, workflows, pipelines) */}
         {![
           "assets",
           "certifications",
@@ -1196,92 +1028,101 @@ export default function ManageHubPage() {
           "integrations",
         ].includes(selectedTool) && (
           <div className="divide-y divide-slate-100 text-xs">
-            {items.map((item) => {
-              const meta = parseMeta(item.metadataJson);
-              return (
-                <div
-                  key={item.id}
-                  className="py-3.5 flex flex-wrap items-center justify-between gap-4 hover:bg-slate-50 px-3 rounded-lg"
-                >
-                  <div className="space-y-1 max-w-2xl">
-                    <div className="flex items-center space-x-2">
-                      <p className="font-bold text-sm text-slate-900">
-                        {item.name}
-                      </p>
-                      <StatusBadge status={item.status} />
-                      {selectedTool === "workflows" && meta.runs !== undefined && (
-                        <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold text-[10px]">
-                          Runs: {meta.runs}
-                        </span>
+            {items.length === 0 ? (
+              <p className="py-6 text-center text-slate-400">
+                No {activeMod.title.toLowerCase()} records yet.
+              </p>
+            ) : (
+              items.map((item) => {
+                const meta = parseMeta(item.metadataJson);
+                return (
+                  <div
+                    key={item.id}
+                    className="py-3.5 flex flex-wrap items-center justify-between gap-4 hover:bg-slate-50 px-3 rounded-lg"
+                  >
+                    <div className="space-y-1 max-w-2xl">
+                      <div className="flex items-center space-x-2">
+                        <p className="font-bold text-sm text-slate-900">
+                          {item.name}
+                        </p>
+                        <StatusBadge status={item.status} />
+                        {selectedTool === "workflows" &&
+                          meta.runs !== undefined && (
+                            <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold text-[10px]">
+                              Runs: {meta.runs}
+                            </span>
+                          )}
+                      </div>
+                      <p className="text-slate-600">{item.subtitle}</p>
+                      {meta.fileName && meta.fileUrl && (
+                        <a
+                          href={normalizeFileUrl(meta.fileUrl)}
+                          target="_blank"
+                          rel="noreferrer"
+                          download={meta.fileName}
+                          className="inline-flex items-center space-x-1 text-blue-600 hover:underline font-semibold pt-1"
+                        >
+                          <Paperclip className="w-3.5 h-3.5" />
+                          <span>Attachment: {meta.fileName}</span>
+                        </a>
                       )}
                     </div>
-                    <p className="text-slate-600">{item.subtitle}</p>
-                    {meta.fileName && (
-                      <a
-                        href={normalizeFileUrl(meta.fileUrl, item.name)}
-                        target="_blank"
-                        rel="noreferrer"
-                        download={meta.fileName}
-                        className="inline-flex items-center space-x-1 text-blue-600 hover:underline font-semibold pt-1"
-                      >
-                        <Paperclip className="w-3.5 h-3.5" />
-                        <span>Attachment: {meta.fileName}</span>
-                      </a>
-                    )}
-                  </div>
 
-                  <div className="flex items-center space-x-2">
-                    {selectedTool === "workflows" && (
+                    <div className="flex items-center space-x-2">
+                      {selectedTool === "workflows" && (
+                        <button
+                          onClick={() =>
+                            handleRunWorkflowNow(item.id, item.name)
+                          }
+                          className="px-2.5 py-1 rounded border border-blue-600 text-blue-700 hover:bg-blue-50 font-semibold flex items-center space-x-1"
+                        >
+                          <Play className="w-3 h-3" />
+                          <span>Run Now</span>
+                        </button>
+                      )}
+                      {selectedTool === "team" && meta.email && (
+                        <button
+                          onClick={() =>
+                            mutate(
+                              "SEND_EMAIL",
+                              {
+                                to: meta.email,
+                                subject: `Reminder: Join {{workspace.name}} (${item.name})`,
+                                body: `Hi ${item.name},\n\nYour coworker invitation to {{workspace.name}} is ready.\n\nBest regards,\n{{workspace.name}}`,
+                                templateName: "Coworker Invite",
+                              },
+                              `Resent invitation email to ${item.name}!`
+                            )
+                          }
+                          className="px-2.5 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold"
+                        >
+                          Resend Invite
+                        </button>
+                      )}
                       <button
-                        onClick={() => handleRunWorkflowNow(item.id, item.name)}
-                        className="px-2.5 py-1 rounded border border-blue-600 text-blue-700 hover:bg-blue-50 font-semibold flex items-center space-x-1"
+                        onClick={() => openEditModal(item)}
+                        className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center space-x-1"
                       >
-                        <Play className="w-3 h-3" />
-                        <span>Run Now</span>
+                        <Edit3 className="w-3 h-3" />
+                        <span>Edit</span>
                       </button>
-                    )}
-                    {selectedTool === "team" && (
                       <button
                         onClick={() =>
                           mutate(
-                            "SEND_EMAIL",
-                            {
-                              to: meta.email || "coworker@r-prm.example.com",
-                              subject: `Reminder: Join R-PRM Workspace (${item.name})`,
-                              body: `Hi ${item.name},\n\nYour coworker invitation to R-PRM is ready.`,
-                              templateName: "Coworker Invite",
-                            },
-                            `Resent invitation email to ${item.name}!`
+                            "DELETE_MANAGE_ITEM",
+                            { id: item.id },
+                            `Deleted "${item.name}"`
                           )
                         }
-                        className="px-2.5 py-1 rounded border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold"
+                        className="p-1 text-slate-400 hover:text-red-600"
                       >
-                        Resend Invite
+                        <Trash2 className="w-4 h-4" />
                       </button>
-                    )}
-                    <button
-                      onClick={() => openEditModal(item)}
-                      className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center space-x-1"
-                    >
-                      <Edit3 className="w-3 h-3" />
-                      <span>Edit</span>
-                    </button>
-                    <button
-                      onClick={() =>
-                        mutate(
-                          "DELETE_MANAGE_ITEM",
-                          { id: item.id },
-                          `Deleted "${item.name}"`
-                        )
-                      }
-                      className="p-1 text-slate-400 hover:text-red-600"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         )}
       </div>
@@ -1301,6 +1142,7 @@ export default function ManageHubPage() {
         uploading={uploading}
         programs={programs}
         partners={partners}
+        baseCurrency={baseCurrency}
         awardModalCertId={awardModalCertId}
         setAwardModalCertId={setAwardModalCertId}
         selectedPartnerToAward={selectedPartnerToAward}

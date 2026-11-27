@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { usePrm } from "@/context/PrmContext";
 import { AppShellDrawersAndModals } from "./AppShellModals";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 import {
   ChevronDown,
   Bell,
@@ -33,7 +34,6 @@ import {
   X,
   Check,
   Mail,
-  ExternalLink,
 } from "lucide-react";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -42,6 +42,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const {
     programs,
     partners,
+    leads,
+    deals,
+    rewards,
     manageItems,
     settings,
     session,
@@ -57,21 +60,41 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const brandLogoText =
     acct.logoText || (brandName.charAt(0) || "R").toUpperCase();
   const brandColor = acct.primaryColor || "#2563EB";
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
   const userName = session?.name || "Administrator";
   const userFirstName = userName.split(" ")[0] || userName;
   const userInitial = (userFirstName.charAt(0) || "A").toUpperCase();
 
   const [openMenu, setOpenMenu] = useState<
-    "partners" | "mapping" | "more" | "user" | "whatsnew" | "notifications" | "outbox" | "beacon" | null
+    | "partners"
+    | "mapping"
+    | "more"
+    | "user"
+    | "whatsnew"
+    | "notifications"
+    | "outbox"
+    | "beacon"
+    | null
   >(null);
 
   const sentEmails = manageItems.filter((m) => m.category === "sent_emails");
 
-  // Add Partner Modal State
+  // Live Notifications computed strictly from real records (§3.5.1)
+  const pendingDeals = deals.filter((d) => d.status === "Pending");
+  const pendingLeads = leads.filter((l) => l.status === "Pending");
+  const pendingRewards = rewards.filter((r) => r.status === "Pending");
+  const pendingRewardsTotal = pendingRewards.reduce(
+    (sum, r) => sum + Number(r.amountBase || 0),
+    0
+  );
+  const unreadNotificationsCount =
+    pendingDeals.length + pendingLeads.length + pendingRewards.length;
+
+  // Add Partner Modal State (no demo prefills)
   const [partnerForm, setPartnerForm] = useState({
     name: "",
-    programId: "prog-strategic",
-    country: "Singapore",
+    programId: "",
+    country: "",
     language: "English",
     contactFirstName: "",
     contactLastName: "",
@@ -81,59 +104,66 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     portalAccess: true,
   });
 
-  // Submit / Share Lead Modal State
+  // Submit / Share Lead Modal State (no demo prefills)
   const [leadForm, setLeadForm] = useState({
-    sourcePartnerName: "Apex Cloud Solutions Pte Ltd",
+    sourcePartnerName: "",
     firstName: "",
     lastName: "",
     company: "",
     jobTitle: "",
     email: "",
     phone: "",
-    country: "Singapore",
+    country: "",
     retailBrand: "",
-    outletsCount: "5",
+    outletsCount: "",
     website: "",
-    posSolution: "CloudPOS Pro",
+    posSolution: "",
     remarks: "",
-    deadline: "2026-12-31",
+    deadline: "",
   });
 
-  // 3-Step Register Deal Wizard State
+  // 3-Step Register Deal Wizard State (no demo prefills)
   const [dealStep, setDealStep] = useState<1 | 2 | 3>(1);
   const [dealForm, setDealForm] = useState({
-    partnerName: "Apex Cloud Solutions Pte Ltd",
+    partnerName: "",
     name: "",
-    amount: "24000",
-    currency: "SGD",
+    amount: "",
+    currency: "",
     stage: "Discovery Stage",
     dealType: "New Business",
-    subscriptionPlan: "Enterprise Annual",
-    closeDate: "2027-01-31",
+    subscriptionPlan: "",
+    closeDate: "",
     comment: "",
     clientName: "",
     company: "",
-    assignedContact: "Jordan Lee",
+    assignedContact: "",
   });
 
   const closeMenus = () => setOpenMenu(null);
 
   const handleCreatePartner = async (e: React.FormEvent) => {
     e.preventDefault();
-    const prog = programs.find((p) => p.id === partnerForm.programId);
+    const resolvedProgramId = partnerForm.programId || programs[0]?.id || "";
+    const prog = programs.find((p) => p.id === resolvedProgramId);
+    if (!prog) {
+      showToast("Create a partner program first before enrolling a partner.");
+      return;
+    }
     await mutate(
       "CREATE_PARTNER",
       {
         ...partnerForm,
-        programName: prog?.name || "R-Cloud Strategic Solution Partners",
+        programId: prog.id,
+        programName: prog.name,
+        currency: baseCurrency,
       },
-      `Partner "${partnerForm.name}" created with portal access!`
+      `Partner "${partnerForm.name}" created!`
     );
     setGlobalModal(null);
     setPartnerForm({
       name: "",
-      programId: "prog-strategic",
-      country: "Singapore",
+      programId: "",
+      country: "",
       language: "English",
       contactFirstName: "",
       contactLastName: "",
@@ -146,15 +176,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const handleCreateLead = async (e: React.FormEvent) => {
     e.preventDefault();
+    const resolvedPartnerName =
+      leadForm.sourcePartnerName || partners[0]?.name || "";
+    if (!resolvedPartnerName) {
+      showToast("Add a partner first before submitting a lead.");
+      return;
+    }
     const isShared = globalModal === "share_lead";
     await mutate(
       "CREATE_LEAD",
       {
         ...leadForm,
+        sourcePartnerName: resolvedPartnerName,
         source: isShared ? "Shared" : "Partner Portal",
       },
       isShared
-        ? `Lead "${leadForm.firstName} ${leadForm.lastName}" shared with ${leadForm.sourcePartnerName}`
+        ? `Lead "${leadForm.firstName} ${leadForm.lastName}" shared with ${resolvedPartnerName}`
         : `Lead "${leadForm.firstName} ${leadForm.lastName}" submitted!`
     );
     setGlobalModal(null);
@@ -166,10 +203,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setDealStep((s) => (s === 1 ? 2 : 3));
       return;
     }
+    const resolvedPartnerName =
+      dealForm.partnerName || partners[0]?.name || "";
+    if (!resolvedPartnerName) {
+      showToast("Add a partner first before registering a deal.");
+      return;
+    }
     await mutate(
       "CREATE_DEAL",
-      dealForm,
-      `Deal "${dealForm.name}" registered for ${dealForm.partnerName}!`
+      {
+        ...dealForm,
+        partnerName: resolvedPartnerName,
+        currency: dealForm.currency || baseCurrency,
+      },
+      `Deal "${dealForm.name}" registered for ${resolvedPartnerName}!`
     );
     setDealStep(1);
     setGlobalModal(null);
@@ -178,8 +225,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isActive = (prefixes: string[]) =>
     prefixes.some((p) => pathname === p || pathname.startsWith(p + "/"));
 
-  // D12 Fix (§4.4 & §4.6): Partner portal (/p/*), public forms (/forms/*), and login screens (/login)
-  // have their own dedicated layouts and NEVER display the Admin navigation header!
   const isStandaloneSurface =
     pathname === "/setup" ||
     pathname.startsWith("/setup/") ||
@@ -204,12 +249,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const onboardingHref = partners[0]
+    ? `/partner-onboarding/${partners[0].id}`
+    : "/partner-prospection/views/all";
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-      {/* Top Global Navigation Bar (Blue Theme + "R" Emblem Logo) */}
       <header className="sticky top-0 z-40 h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center space-x-1">
-          {/* Brand Emblem Logo */}
           <Link
             href="/dashboard"
             onClick={closeMenus}
@@ -231,7 +278,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </Link>
 
-          {/* Home */}
           <Link
             href="/dashboard"
             onClick={closeMenus}
@@ -244,10 +290,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             Home
           </Link>
 
-          {/* Partners Dropdown */}
           <div className="relative">
             <button
-              onClick={() => setOpenMenu(openMenu === "partners" ? null : "partners")}
+              onClick={() =>
+                setOpenMenu(openMenu === "partners" ? null : "partners")
+              }
               className={`px-3 py-2 rounded-md text-sm font-medium flex items-center space-x-1 transition-colors ${
                 isActive([
                   "/partners",
@@ -289,7 +336,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <span>Prospection</span>
                 </Link>
                 <Link
-                  href="/partner-onboarding/9"
+                  href={onboardingHref}
                   onClick={closeMenus}
                   className="flex items-center space-x-2.5 px-3.5 py-2 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700"
                 >
@@ -300,10 +347,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
 
-          {/* Account Mapping Dropdown */}
           <div className="relative">
             <button
-              onClick={() => setOpenMenu(openMenu === "mapping" ? null : "mapping")}
+              onClick={() =>
+                setOpenMenu(openMenu === "mapping" ? null : "mapping")
+              }
               className={`px-3 py-2 rounded-md text-sm font-medium flex items-center space-x-1 transition-colors ${
                 isActive([
                   "/account-mapping-overview",
@@ -365,7 +413,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
 
-          {/* Leads */}
           <Link
             href="/leads/views/all"
             onClick={closeMenus}
@@ -378,7 +425,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             Leads
           </Link>
 
-          {/* "..." Overflow Menu (9 Modules) */}
           <div className="relative">
             <button
               onClick={() => setOpenMenu(openMenu === "more" ? null : "more")}
@@ -481,9 +527,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        {/* Right Utility Controls */}
         <div className="flex items-center space-x-2">
-          {/* Sent Emails Outbox / Partner Portal Switcher */}
           <button
             onClick={() => setOpenMenu(openMenu === "outbox" ? null : "outbox")}
             className="relative px-2.5 py-1.5 rounded-md text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 flex items-center space-x-1.5"
@@ -496,97 +540,105 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </span>
           </button>
 
-          {/* What's new */}
           <button
-            onClick={() => setOpenMenu(openMenu === "whatsnew" ? null : "whatsnew")}
+            onClick={() =>
+              setOpenMenu(openMenu === "whatsnew" ? null : "whatsnew")
+            }
             className="relative px-2.5 py-1.5 rounded-md text-xs font-medium text-slate-700 hover:bg-slate-100 flex items-center space-x-1.5"
           >
             <Sparkles className="w-3.5 h-3.5 text-blue-600" />
             <span className="hidden md:inline">What&apos;s new</span>
-            <span className="px-1.5 py-0.5 text-[10px] font-bold bg-blue-600 text-white rounded-full">
-              10
-            </span>
           </button>
 
-          {/* Notifications Bell */}
+          {/* Live Notifications Bell (§3.5.1) */}
           <div className="relative">
             <button
               onClick={() =>
-                setOpenMenu(openMenu === "notifications" ? null : "notifications")
+                setOpenMenu(
+                  openMenu === "notifications" ? null : "notifications"
+                )
               }
               className="relative p-2 rounded-md text-slate-600 hover:bg-slate-100"
               title="Notifications"
             >
               <Bell className="w-4 h-4" />
-              <span className="absolute -top-0.5 -right-0.5 px-1.5 py-0.2 text-[10px] font-bold bg-blue-600 text-white rounded-full">
-                14
-              </span>
+              {unreadNotificationsCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 px-1.5 py-0.2 text-[10px] font-bold bg-blue-600 text-white rounded-full">
+                  {unreadNotificationsCount}
+                </span>
+              )}
             </button>
             {openMenu === "notifications" && (
               <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-3 z-50">
                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
                   <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    Notifications (14 Unread)
+                    Notifications ({unreadNotificationsCount})
                   </span>
-                  <button
-                    onClick={() => {
-                      showToast("All notifications marked as read");
-                      closeMenus();
-                    }}
-                    className="text-xs text-blue-600 hover:underline"
-                  >
-                    Mark all read
-                  </button>
                 </div>
-                <div className="space-y-2 max-h-72 overflow-y-auto text-xs">
-                  <div
-                    onClick={() => {
-                      closeMenus();
-                      router.push("/deals/views/all");
-                    }}
-                    className="p-2 rounded-lg bg-blue-50/70 hover:bg-blue-100/60 cursor-pointer"
-                  >
-                    <p className="font-semibold text-slate-800">
-                      New Deal Registered by Apex Cloud
-                    </p>
-                    <p className="text-slate-600 mt-0.5">
-                      ENT - Vertex Department Stores Omnichannel (SGD 36,000)
-                    </p>
+                {unreadNotificationsCount === 0 ? (
+                  <p className="py-5 text-center text-xs text-slate-400">
+                    No pending notifications.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-72 overflow-y-auto text-xs">
+                    {pendingDeals.slice(0, 3).map((d) => (
+                      <div
+                        key={d.id}
+                        onClick={() => {
+                          closeMenus();
+                          router.push(`/deals/${d.id}`);
+                        }}
+                        className="p-2 rounded-lg bg-blue-50/70 hover:bg-blue-100/60 cursor-pointer"
+                      >
+                        <p className="font-semibold text-slate-800">
+                          Deal Pending Review ({d.partnerName})
+                        </p>
+                        <p className="text-slate-600 mt-0.5">
+                          {d.name} ({d.currency} {d.amount.toLocaleString()})
+                        </p>
+                      </div>
+                    ))}
+                    {pendingLeads.slice(0, 3).map((l) => (
+                      <div
+                        key={l.id}
+                        onClick={() => {
+                          closeMenus();
+                          router.push(`/leads/${l.id}`);
+                        }}
+                        className="p-2 rounded-lg bg-blue-50/70 hover:bg-blue-100/60 cursor-pointer"
+                      >
+                        <p className="font-semibold text-slate-800">
+                          Lead Pending Validation
+                        </p>
+                        <p className="text-slate-600 mt-0.5">
+                          {l.firstName} {l.lastName} · {l.company}
+                        </p>
+                      </div>
+                    ))}
+                    {pendingRewards.length > 0 && (
+                      <div
+                        onClick={() => {
+                          closeMenus();
+                          router.push("/rewards/views/all");
+                        }}
+                        className="p-2 rounded-lg hover:bg-slate-100 cursor-pointer"
+                      >
+                        <p className="font-semibold text-slate-800">
+                          {pendingRewards.length} Pending Reward(s) Awaiting
+                          Validation
+                        </p>
+                        <p className="text-slate-500 mt-0.5">
+                          Totaling {baseCurrency}{" "}
+                          {pendingRewardsTotal.toLocaleString()}
+                        </p>
+                      </div>
+                    )}
                   </div>
-                  <div
-                    onClick={() => {
-                      closeMenus();
-                      router.push("/leads/views/all");
-                    }}
-                    className="p-2 rounded-lg bg-blue-50/70 hover:bg-blue-100/60 cursor-pointer"
-                  >
-                    <p className="font-semibold text-slate-800">
-                      Lead Pending Validation
-                    </p>
-                    <p className="text-slate-600 mt-0.5">
-                      Nadia Khoury · Velvet &amp; Vine Boutique Retail
-                    </p>
-                  </div>
-                  <div
-                    onClick={() => {
-                      closeMenus();
-                      router.push("/rewards/views/all");
-                    }}
-                    className="p-2 rounded-lg hover:bg-slate-100 cursor-pointer"
-                  >
-                    <p className="font-semibold text-slate-800">
-                      4 Pending Rewards Awaiting Approval
-                    </p>
-                    <p className="text-slate-500 mt-0.5">
-                      Totaling SGD 10,544 across 3 partners
-                    </p>
-                  </div>
-                </div>
+                )}
               </div>
             )}
           </div>
 
-          {/* Help ? */}
           <Link
             href="/help"
             onClick={closeMenus}
@@ -596,7 +648,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <HelpCircle className="w-4 h-4" />
           </Link>
 
-          {/* User / Workspace Menu */}
           <div className="relative">
             <button
               onClick={() => setOpenMenu(openMenu === "user" ? null : "user")}
@@ -662,10 +713,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      {/* Main Content Workspace */}
       <main className="flex-1">{children}</main>
 
-      {/* Toast Notification Banner */}
       {toast && (
         <div className="fixed bottom-16 right-5 z-50 bg-blue-700 text-white px-4 py-2.5 rounded-lg shadow-lg flex items-center space-x-2 text-sm font-medium animate-fade-in">
           <Check className="w-4 h-4" />
@@ -673,13 +722,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      {/* Floating Bottom-Right Help Beacon Button */}
       <div className="fixed bottom-4 right-4 z-40">
         {openMenu === "beacon" && (
           <div className="mb-2 w-80 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
             <div className="bg-blue-600 text-white p-3.5 flex items-center justify-between">
               <div>
-                <h4 className="font-bold text-sm">R-PRM Support Beacon</h4>
+                <h4 className="font-bold text-sm">Support &amp; Guides</h4>
                 <p className="text-[11px] text-blue-100">
                   Instant docs, API guides &amp; partner help
                 </p>
@@ -724,6 +772,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         setGlobalModal={setGlobalModal}
         programs={programs}
         partners={partners}
+        baseCurrency={baseCurrency}
         partnerForm={partnerForm}
         setPartnerForm={setPartnerForm}
         handleCreatePartner={handleCreatePartner}

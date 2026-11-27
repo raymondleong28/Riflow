@@ -136,6 +136,7 @@ export function PrmProvider({ children }: { children: React.ReactNode }) {
       pathname.startsWith("/setup/") ||
       pathname === "/login" ||
       pathname === "/p/login" ||
+      pathname === "/p/activate" ||
       pathname.startsWith("/forms/")
     ) {
       setLoading(false);

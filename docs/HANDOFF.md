@@ -2,7 +2,7 @@
 
 > **Branch:** `develop` (Sole code writer: Antigravity)
 > **Owner:** Ray
-> **Updated:** 24 Nov 2026
+> **Updated:** 25 Nov 2026
 
 ---
 
@@ -30,3 +30,4 @@
 | **F9** | Clean typecheck & fixture suite (`tests/fixtures.test.ts`) | All tests and application files pass `npm run typecheck`, `npm test`, and `npm run build` from a fresh working copy. |
 | **G4 & §3.2** | Empty database baseline & first-run `/setup` | `npx prisma migrate deploy` creates an empty database schema with zero users or demo records. When no admin exists, routes redirect to `/setup` (protected by `SETUP_TOKEN` in production). |
 | **G6 & G7** | Headless scheduler & health endpoint | `POST /api/scheduler` accepts `Authorization: Bearer $CRON_SECRET`; `GET /api/health` checks secrets, PostgreSQL connectivity, applied migrations, and connector drivers. |
+| **§3.5** | No demo or organisation values in code or schema | Added migration `0003_remove_demo_defaults_and_amount_base` renaming `*Sgd` columns to `*Base` (`amountBase`, `revenuesBase`, `targetRevBase`), adding `ownerId` / `assignedToId` foreign keys, and dropping demo/organisation `@default(...)` values in `prisma/schema.prisma`. Replaced fixed lead-to-deal amounts with `LeadConvertModal` requiring positive amount and defaulting currency to workspace `mainCurrency`; filtered `"My ..."` views on `session.userId`; updated scheduler Day-7 task assignment to use workspace `defaultOwnerName` or flag `[UNASSIGNED]` without falling back to demo names; removed fallback IDs (`prt-1`, `prog-strategic`) in favour of honest `not_found` states; wired admin notification bell to real `AuditLog` events; computed dashboard 12-month chart dynamically in workspace timezone; displayed real user MFA enrolment status without exposing secrets outside enrolment; moved invoice issuer, consent text, email merge tags (`{{workspace.name}}`), and editable `commission_templates` into workspace data/settings; verified §3.5 grep checks, 60 KB file size ceiling, `typecheck`, 32 fixtures, `build`, and `verify-fresh-clone.sh`. |

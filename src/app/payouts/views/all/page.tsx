@@ -4,22 +4,38 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { EntityListToolbar, StatusBadge } from "@/components/SharedEngines";
+import { SUPPORTED_CURRENCIES, CURRENCY_LABELS } from "@/lib/prmEngine";
 import { Settings, X } from "lucide-react";
 
 export default function PayoutsListPage() {
-  const { payouts, partners, mutate } = usePrm();
+  const { payouts, partners, settings, mutate } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
 
+  const acct = settings?.account_settings || {};
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
+
   const [form, setForm] = useState({
     period: "All time",
-    partnerName: "Apex Cloud Solutions Pte Ltd",
+    partnerName: "",
     includeRewards: "Pending or accepted",
     includeType: "Cash",
-    currency: "SGD",
-    threshold: "100",
+    currency: "",
+    threshold: "",
   });
+
+  const openModal = () => {
+    setForm({
+      period: "All time",
+      partnerName: partners[0]?.name || "",
+      includeRewards: "Pending or accepted",
+      includeType: "Cash",
+      currency: baseCurrency,
+      threshold: String(acct.autoPayoutThresholdBase ?? 100),
+    });
+    setModalOpen(true);
+  };
 
   const filtered = payouts.filter((p) => {
     if (activeView !== "All" && p.status !== activeView) return false;
@@ -38,7 +54,10 @@ export default function PayoutsListPage() {
     e.preventDefault();
     await mutate(
       "CREATE_PAYOUT",
-      form,
+      {
+        ...form,
+        currency: form.currency || baseCurrency,
+      },
       `Payout settlement created for ${form.partnerName}!`
     );
     setModalOpen(false);
@@ -55,10 +74,10 @@ export default function PayoutsListPage() {
         search={search}
         onSearchChange={setSearch}
         primaryActionLabel="Create payout"
-        onPrimaryAction={() => setModalOpen(true)}
+        onPrimaryAction={openModal}
         extraRightControls={
           <Link
-            href="/account/payouts"
+            href="/account?tab=Payouts"
             className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 flex items-center space-x-1.5"
           >
             <Settings className="w-3.5 h-3.5 text-blue-600" />
@@ -76,7 +95,7 @@ export default function PayoutsListPage() {
                 <th className="py-3 px-3 font-semibold">Partner</th>
                 <th className="py-3 px-3 font-semibold text-right">Amount</th>
                 <th className="py-3 px-3 font-semibold text-right">
-                  Amount (SGD)
+                  Amount ({baseCurrency})
                 </th>
                 <th className="py-3 px-3 font-semibold">From</th>
                 <th className="py-3 px-3 font-semibold">To</th>
@@ -103,7 +122,8 @@ export default function PayoutsListPage() {
                     {p.currency} {p.amount.toLocaleString()}
                   </td>
                   <td className="py-3 px-3 text-right font-bold text-slate-900">
-                    SGD {p.amountSgd.toLocaleString()}
+                    {baseCurrency}{" "}
+                    {(p.amountBase ?? p.amount ?? 0).toLocaleString()}
                   </td>
                   <td className="py-3 px-3 text-slate-500">{p.periodFrom}</td>
                   <td className="py-3 px-3 text-slate-500">{p.periodTo}</td>
@@ -174,15 +194,17 @@ export default function PayoutsListPage() {
               </div>
               <div>
                 <label className="block font-medium text-slate-700 mb-1">
-                  For partner
+                  For partner *
                 </label>
                 <select
+                  required
                   value={form.partnerName}
                   onChange={(e) =>
                     setForm({ ...form, partnerName: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
+                  <option value="">Select partner...</option>
                   {partners.map((p) => (
                     <option key={p.id} value={p.name}>
                       {p.name}
@@ -228,15 +250,17 @@ export default function PayoutsListPage() {
                     Currency
                   </label>
                   <select
-                    value={form.currency}
+                    value={form.currency || baseCurrency}
                     onChange={(e) =>
                       setForm({ ...form, currency: e.target.value })
                     }
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
-                    <option value="SGD">Singapore Dollar (SGD)</option>
-                    <option value="USD">US Dollar (USD)</option>
-                    <option value="EUR">Euro (EUR)</option>
+                    {SUPPORTED_CURRENCIES.map((code) => (
+                      <option key={code} value={code}>
+                        {CURRENCY_LABELS[code] || code} ({code})
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -245,6 +269,7 @@ export default function PayoutsListPage() {
                   </label>
                   <input
                     type="number"
+                    min="0"
                     value={form.threshold}
                     onChange={(e) =>
                       setForm({ ...form, threshold: e.target.value })

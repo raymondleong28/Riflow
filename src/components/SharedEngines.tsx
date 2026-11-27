@@ -123,12 +123,13 @@ export function EntityListToolbar({
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importObjectType, setImportObjectType] = useState("partners");
   const [importCsvText, setImportCsvText] = useState(
-    "name,country,programName,qualifyingLevel,status\nMeridian Cloud Systems,Singapore,R-Cloud Strategic Solution Partners,Silver Tier,Active"
+    "name,country,programName,qualifyingLevel,status\n"
   );
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [importPreview, setImportPreview] = useState<any | null>(null);
 
   const allViews = [...views, ...customViews];
+  const baseCurrency = settings?.account_settings?.mainCurrency || "";
   const customProps = Array.isArray(settings.custom_properties)
     ? settings.custom_properties
     : [];
@@ -316,7 +317,7 @@ export function EntityListToolbar({
             Owner: Any
           </span>
           <span className="px-2 py-0.5 rounded bg-white border border-blue-200 text-slate-700">
-            Currency: Multi-currency (Base SGD)
+            Currency: Multi-currency{baseCurrency ? ` (Base ${baseCurrency})` : ""}
           </span>
           {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           {customProps.map((cp: any) => (
@@ -443,7 +444,7 @@ export function NotesAndActivitiesTab({
   entityType: "partner" | "lead" | "deal";
   entityId: string;
 }) {
-  const { notes, tasks, manageItems, settings, mutate, showToast } = usePrm();
+  const { notes, tasks, manageItems, settings, session, mutate, showToast } = usePrm();
   const [noteText, setNoteText] = useState("");
   const [isShared, setIsShared] = useState(true);
   const [subTab, setSubTab] = useState<
@@ -452,8 +453,8 @@ export function NotesAndActivitiesTab({
 
   const [uploading, setUploading] = useState(false);
   const [meetingTitle, setMeetingTitle] = useState("");
-  const [meetingDate, setMeetingDate] = useState("2026-12-02 10:30 AM");
-  const [emailTo, setEmailTo] = useState("jordan.lee@apexcloud.example.com");
+  const [meetingDate, setMeetingDate] = useState("");
+  const [emailTo, setEmailTo] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
   const [taskName, setTaskName] = useState("");
@@ -528,7 +529,9 @@ export function NotesAndActivitiesTab({
           {
             category: "entity_attachment",
             name: json.fileName,
-            subtitle: `${json.fileSize} · Uploaded by Alex Morgan`,
+            subtitle: `${json.fileSize} · Uploaded by ${
+              session?.name || session?.email || "User"
+            }`,
             status: "Active",
             metadata: {
               entityType,
@@ -760,29 +763,24 @@ export function NotesAndActivitiesTab({
           </form>
 
           <div className="space-y-2">
-            {entityMeetings.map((m) => (
-              <div
-                key={m.id}
-                className="p-3 rounded-lg bg-white border border-slate-200 flex items-center justify-between"
-              >
-                <div>
-                  <p className="font-semibold text-slate-900">{m.name}</p>
-                  <p className="text-slate-500">{m.subtitle}</p>
+            {entityMeetings.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4 text-center">
+                No meetings scheduled yet.
+              </p>
+            ) : (
+              entityMeetings.map((m) => (
+                <div
+                  key={m.id}
+                  className="p-3 rounded-lg bg-white border border-slate-200 flex items-center justify-between"
+                >
+                  <div>
+                    <p className="font-semibold text-slate-900">{m.name}</p>
+                    <p className="text-slate-500">{m.subtitle}</p>
+                  </div>
+                  <StatusBadge status={m.status} />
                 </div>
-                <StatusBadge status={m.status} />
-              </div>
-            ))}
-            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
-              <div>
-                <p className="font-semibold text-slate-900">
-                  Quarterly Co-Selling &amp; Pipeline Sync
-                </p>
-                <p className="text-slate-500">
-                  Scheduled via Google Calendar · Nov 28, 2026 at 10:30 AM SGT
-                </p>
-              </div>
-              <span className="text-blue-600 font-semibold">Upcoming</span>
-            </div>
+              ))
+            )}
           </div>
         </div>
       )}
@@ -909,75 +907,62 @@ export function NotesAndActivitiesTab({
           </div>
 
           <div className="space-y-2">
-            {entityAttachments.map((att) => {
-              let fileUrl = "/api/files/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
-              try {
-                const rawUrl = JSON.parse(att.metadataJson || "{}").fileUrl;
-                if (rawUrl) {
-                  fileUrl = rawUrl.startsWith("/uploads/")
-                    ? `/api/files/${rawUrl.replace(/^\/uploads\//, "")}`
-                    : rawUrl;
+            {entityAttachments.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4 text-center">
+                No attachments uploaded yet.
+              </p>
+            ) : (
+              entityAttachments.map((att) => {
+                let fileUrl = "";
+                try {
+                  const rawUrl = JSON.parse(att.metadataJson || "{}").fileUrl;
+                  if (rawUrl) {
+                    fileUrl = rawUrl.startsWith("/uploads/")
+                      ? `/api/files/${rawUrl.replace(/^\/uploads\//, "")}`
+                      : rawUrl;
+                  }
+                } catch {
+                  // fallback
                 }
-              } catch {
-                // fallback
-              }
-              return (
-                <div
-                  key={att.id}
-                  className="p-3 rounded-lg bg-white border border-slate-200 flex items-center justify-between"
-                >
-                  <div>
-                    <p className="font-bold text-slate-900">{att.name}</p>
-                    <p className="text-slate-500">{att.subtitle}</p>
+                return (
+                  <div
+                    key={att.id}
+                    className="p-3 rounded-lg bg-white border border-slate-200 flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="font-bold text-slate-900">{att.name}</p>
+                      <p className="text-slate-500">{att.subtitle}</p>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {fileUrl && (
+                        <a
+                          href={fileUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          download={att.name}
+                          className="px-2.5 py-1 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200 flex items-center space-x-1"
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>Download</span>
+                        </a>
+                      )}
+                      <button
+                        onClick={() =>
+                          mutate(
+                            "DELETE_MANAGE_ITEM",
+                            { id: att.id },
+                            `Removed attachment "${att.name}"`
+                          )
+                        }
+                        className="text-slate-400 hover:text-red-600"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <a
-                      href={fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      download={att.name}
-                      className="px-2.5 py-1 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200 flex items-center space-x-1"
-                    >
-                      <Download className="w-3 h-3" />
-                      <span>Download</span>
-                    </a>
-                    <button
-                      onClick={() =>
-                        mutate(
-                          "DELETE_MANAGE_ITEM",
-                          { id: att.id },
-                          `Removed attachment "${att.name}"`
-                        )
-                      }
-                      className="text-slate-400 hover:text-red-600"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-
-            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
-              <div>
-                <p className="font-semibold text-slate-900">
-                  R-PRM_2026_Enterprise_Pitch_Deck.pdf
-                </p>
-                <p className="text-slate-500">
-                  1.4 MB · Uploaded by Alex Morgan
-                </p>
-              </div>
-              <a
-                href="/api/files/R-PRM_2026_Enterprise_Pitch_Deck.pdf"
-                target="_blank"
-                rel="noreferrer"
-                download="R-PRM_2026_Enterprise_Pitch_Deck.pdf"
-                className="px-2.5 py-1 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200 flex items-center space-x-1"
-              >
-                <Download className="w-3 h-3" />
-                <span>Download</span>
-              </a>
-            </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}

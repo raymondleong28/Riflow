@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "./prisma";
 import {
   convertWithDatedFx,
+  currentIsoDateInTimezone,
+  currentMonthKeyInTimezone,
   generateRewardsFromPartnerLevel,
   generateRandomLeadFormToken,
   resolveExplicitProgramAndPipeline,
@@ -15,12 +17,14 @@ import {
   syncDealToHubSpotConnector,
 } from "./connectors";
 import {
+  getWorkspaceAccountSettings,
   writeAudit,
   sendAndLogTransactionalEmail,
   parseCsvText,
   handleCsvImportMutation,
   matchAccountListsByDomainAndName,
 } from "./importAndEmailHelpers";
+import { executeWorkspaceAdminMutation } from "./workspaceAdminMutations";
 
 export {
   writeAudit,
@@ -34,23 +38,25 @@ export async function executeResourceMutation(
   session: RprmSession,
   action: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  payload: any
+  payload: any = {}
 ) {
+  const ws = await getWorkspaceAccountSettings();
+  const todayIso = currentIsoDateInTimezone(ws.timezone);
+
   switch (action) {
     case "CSV_IMPORT":
       return handleCsvImportMutation(session, payload);
 
     case "UPLOAD_ACCOUNT_MAPPING_LISTS": {
-      // §16.4 P4: Upload Eber list & Partner list CSVs and compute overlaps by normalized domain & company name
-      const eberList = Array.isArray(payload.eberList)
-        ? payload.eberList
-        : parseCsvText(payload.eberCsv || "");
+      const orgList = Array.isArray(payload.orgList)
+        ? payload.orgList
+        : parseCsvText(payload.orgCsv || "");
       const partnerList = Array.isArray(payload.partnerList)
         ? payload.partnerList
         : parseCsvText(payload.partnerCsv || "");
 
       const matched = matchAccountListsByDomainAndName(
-        eberList.map((r: Record<string, string>) => ({
+        orgList.map((r: Record<string, string>) => ({
           accountName: r.accountName || r.company || r.name,
           domain: r.domain || r.website,
           type: r.type || "Prospect",
@@ -58,15 +64,12 @@ export async function executeResourceMutation(
           ownerEmail: r.ownerEmail || session.email,
         })),
         partnerList.map((r: Record<string, string>) => ({
-          partnerName:
-            r.partnerName ||
-            payload.partnerName ||
-            "Apex Cloud Solutions Pte Ltd",
+          partnerName: r.partnerName || payload.partnerName || "",
           accountName: r.accountName || r.company || r.name,
           domain: r.domain || r.website,
           type: r.type || "Customer",
-          ownerName: r.ownerName || "Jordan Lee",
-          ownerEmail: r.ownerEmail || "jordan.lee@apexcloud.example.com",
+          ownerName: r.ownerName || "",
+          ownerEmail: r.ownerEmail || "",
         }))
       );
 
@@ -79,17 +82,33 @@ export async function executeResourceMutation(
             ownerName: m.ownerName,
             ownerEmail: m.ownerEmail,
             source: payload.sourceName || "CSV List Matching",
-            importedDate: new Date().toISOString().slice(0, 10),
+            importedDate: todayIso,
             hasOverlap: m.hasOverlap,
             partnerName: m.partnerName,
             partnerAccountName: m.partnerAccountName,
             partnerAccountType: m.partnerAccountType,
             partnerOwnerName: m.partnerOwnerName,
             partnerOwnerEmail: m.partnerOwnerEmail,
-            overlapDate: new Date().toISOString().slice(0, 10),
+            overlapDate: todayIso,
           },
         });
         createdRecords.push({ ...created, matchedBy: m.matchedBy });
+      }
+
+      const overlapsFound = matched.filter((m) => m.hasOverlap).length;
+
+      if (payload.name || payload.sourceName) {
+        await prisma.dataSource.create({
+          data: {
+            name: payload.name || payload.sourceName,
+            status: "Active",
+            sharedWith: payload.sharedWith || "",
+            type: "CSV Upload",
+            accountType: payload.accountType || "Customers & Prospects",
+            lastImportedDate: todayIso,
+            createdBy: session.name,
+          },
+        });
       }
 
       await writeAudit({
@@ -97,14 +116,15 @@ export async function executeResourceMutation(
         action: "ACCOUNT_MAPPING_MATCH",
         objectType: "AccountRecord",
         objectId: `batch-${Date.now()}`,
-        summary: `Matched ${eberList.length} Eber accounts against ${partnerList.length} partner accounts -> ${
-          matched.filter((m) => m.hasOverlap).length
-        } overlap(s)`,
+        summary: `Matched ${orgList.length} organisation accounts against ${partnerList.length} partner accounts -> ${overlapsFound} overlap(s)`,
       });
 
       return NextResponse.json({
         ok: true,
-        matchedCount: matched.filter((m) => m.hasOverlap).length,
+        orgCount: orgList.length,
+        partnerCount: partnerList.length,
+        overlapsFound,
+        matchedCount: overlapsFound,
         records: createdRecords,
       });
     }
@@ -128,33 +148,54 @@ export async function executeResourceMutation(
         return NextResponse.json({ error: String(err) }, { status: 400 });
       }
 
+      const matchedProgram = allPrograms.find(
+        (p) => p.id === resolved.programId
+      );
+      let firstLevelName = "";
+      if (matchedProgram?.levelsJson) {
+        try {
+          const parsedLevels = JSON.parse(matchedProgram.levelsJson);
+          if (Array.isArray(parsedLevels) && parsedLevels[0]?.name) {
+            firstLevelName = String(parsedLevels[0].name);
+          }
+        } catch {
+          firstLevelName = "";
+        }
+      }
+
       const lf = generateRandomLeadFormToken();
 
       const partner = await prisma.partner.create({
         data: {
-          name: payload.name,
+          name: String(payload.name || "").trim(),
+          ownerId: payload.ownerId || session.userId,
+          owner: payload.owner || session.name,
+          groupName: payload.groupName || "",
           programId: resolved.programId,
           programName: resolved.programName,
           onboardingPipeline: resolved.onboardingPipeline,
-          country: payload.country || "Singapore",
+          country: payload.country || "",
           language: payload.language || "English",
-          currency: payload.currency || "SGD",
+          currency: String(payload.currency || ws.mainCurrency)
+            .trim()
+            .toUpperCase(),
           partnerType: payload.partnerType || "Reseller",
-          qualifyingLevel: payload.qualifyingLevel || "Silver Tier",
+          qualifyingLevel: payload.qualifyingLevel || firstLevelName,
           status: payload.status || "Active",
           onboardingStatus: payload.onboardingStatus || "In progress",
-          onboardingStage: payload.onboardingStage || "Kickoff Welcome Call",
+          onboardingStage: payload.onboardingStage || "Kickoff",
           prospectionStage: payload.prospectionStage || "New",
-          contactFirstName: payload.contactFirstName || "Alex",
-          contactLastName: payload.contactLastName || "Partner",
-          contactEmail: payload.contactEmail || "contact@partner.example.com",
-          contactJobTitle: payload.contactJobTitle || "Partner Manager",
-          contactPhone: payload.contactPhone || "+65 6000 0000",
+          contactFirstName: payload.contactFirstName || "",
+          contactLastName: payload.contactLastName || "",
+          contactEmail: payload.contactEmail || "",
+          contactJobTitle: payload.contactJobTitle || "",
+          contactPhone: payload.contactPhone || "",
           portalAccess: payload.portalAccess ?? true,
-          companyWebsite:
-            payload.companyWebsite || "https://partner.example.com",
-          industry: payload.industry || "Cloud & SaaS Consulting",
-          activeSince: new Date().toISOString().slice(0, 10),
+          companyWebsite: payload.companyWebsite || "",
+          companyAddress: payload.companyAddress || "",
+          employeeCount: payload.employeeCount || "",
+          industry: payload.industry || "",
+          activeSince: todayIso,
           leadFormTokenHash: lf.tokenHash,
           leadFormTokenCipher: encryptBankDetails(lf.rawToken),
           bankDetailsJson: encryptBankDetails(
@@ -176,15 +217,19 @@ export async function executeResourceMutation(
 
       let activationUrl = "";
       let activationToken = "";
-      if (partner.portalAccess) {
+      if (partner.portalAccess && partner.contactEmail) {
         const sent = await sendAndLogTransactionalEmail({
           to: partner.contactEmail,
-          subject: `Welcome to R-PRM! Activate your Partner Portal for ${partner.name}`,
-          body: `Hi ${partner.contactFirstName},\n\nYou have been enrolled in "${partner.programName}" (${partner.qualifyingLevel}).`,
+          subject: `Welcome to {{workspace.name}}! Activate your Partner Portal for ${partner.name}`,
+          body: `Hi ${partner.contactFirstName || partner.name},\n\nYou have been enrolled in "${partner.programName}"${
+            partner.qualifyingLevel ? ` (${partner.qualifyingLevel})` : ""
+          } on {{workspace.name}}.`,
           templateName: "Notify accepted partner",
           issueActivationFor: {
             email: partner.contactEmail,
-            name: `${partner.contactFirstName} ${partner.contactLastName}`,
+            name:
+              `${partner.contactFirstName} ${partner.contactLastName}`.trim() ||
+              partner.name,
             partnerId: partner.id,
             partnerName: partner.name,
             role: "Manager",
@@ -241,7 +286,6 @@ export async function executeResourceMutation(
     }
 
     case "REVIEW_PARTNER_APPLICATION": {
-      // §16.4 P2 & F8: Explicit program -> onboarding pipeline assignment; missing program is an error (never name-based or defaulting to first program!)
       const {
         partnerId,
         mode,
@@ -303,6 +347,8 @@ export async function executeResourceMutation(
       const partner = await prisma.partner.update({
         where: { id: partnerId },
         data: {
+          ownerId: existing.ownerId || session.userId,
+          owner: existing.owner || session.name,
           programId: resolvedProgramId,
           programName: resolvedProgramName,
           onboardingPipeline: resolvedPipeline,
@@ -332,15 +378,17 @@ export async function executeResourceMutation(
 
       let activationUrl = "";
       let activationToken = "";
-      if (mode === "accept_active") {
+      if (mode === "accept_active" && partner.contactEmail) {
         const sent = await sendAndLogTransactionalEmail({
           to: partner.contactEmail,
-          subject: `Approved! Activate your ${resolvedProgramName} Partner Portal (${partner.name})`,
-          body: `Hi ${partner.contactFirstName},\n\nYour application for ${resolvedProgramName} has been accepted as an Active Partner on pipeline "${resolvedPipeline}".`,
+          subject: `Approved! Activate your ${resolvedProgramName} Partner Portal at {{workspace.name}}`,
+          body: `Hi ${partner.contactFirstName || partner.name},\n\nYour application for ${resolvedProgramName} at {{workspace.name}} has been accepted as an Active Partner on pipeline "${resolvedPipeline}".`,
           templateName: "Notify accepted partner",
           issueActivationFor: {
             email: partner.contactEmail,
-            name: `${partner.contactFirstName} ${partner.contactLastName}`,
+            name:
+              `${partner.contactFirstName} ${partner.contactLastName}`.trim() ||
+              partner.name,
             partnerId: partner.id,
             partnerName: partner.name,
             role: "Manager",
@@ -348,11 +396,11 @@ export async function executeResourceMutation(
         });
         activationUrl = sent.activationUrl;
         activationToken = sent.activationToken;
-      } else if (mode === "reject") {
+      } else if (mode === "reject" && partner.contactEmail) {
         await sendAndLogTransactionalEmail({
           to: partner.contactEmail,
-          subject: `Update on your ${resolvedProgramName} Partner Application (${partner.name})`,
-          body: `Hi ${partner.contactFirstName},\n\nReason: ${rejectionReason}`,
+          subject: `Update on your ${resolvedProgramName} Partner Application at {{workspace.name}}`,
+          body: `Hi ${partner.contactFirstName || partner.name},\n\nThank you for applying to {{workspace.name}}.\nReason: ${rejectionReason}`,
           templateName: "Notify rejected partner",
         });
       }
@@ -367,15 +415,20 @@ export async function executeResourceMutation(
     case "UPDATE_PARTNER": {
       const targetId =
         session.identityType === "partner" ? session.partnerId : payload.id;
+      if (!targetId) {
+        return NextResponse.json(
+          { error: "Partner ID is required" },
+          { status: 400 }
+        );
+      }
       const updateData = { ...(payload.data || {}) };
-      // §16.2 S8: Always encrypt bankDetailsJson on write!
       if (typeof updateData.bankDetailsJson === "string") {
         updateData.bankDetailsJson = encryptBankDetails(
           updateData.bankDetailsJson
         );
       }
       const partner = await prisma.partner.update({
-        where: { id: targetId! },
+        where: { id: targetId },
         data: updateData,
       });
       await writeAudit({
@@ -384,40 +437,61 @@ export async function executeResourceMutation(
         objectType: "Partner",
         objectId: partner.id,
         summary: `Updated partner "${partner.name}"`,
-        diff: { ...updateData, bankDetailsJson: updateData.bankDetailsJson ? "[ENCRYPTED]" : undefined },
+        diff: {
+          ...updateData,
+          bankDetailsJson: updateData.bankDetailsJson
+            ? "[ENCRYPTED]"
+            : undefined,
+        },
       });
       return NextResponse.json({ ok: true, partner });
     }
 
     case "CREATE_TEAM_MEMBER": {
+      const resolvedPartnerName =
+        session.identityType === "partner" && session.partnerName
+          ? session.partnerName
+          : String(payload.partnerName || "").trim();
+      if (!resolvedPartnerName) {
+        return NextResponse.json(
+          { error: "Partner name is required to add a team member." },
+          { status: 400 }
+        );
+      }
+      const linkedPartner = await prisma.partner.findFirst({
+        where: { name: resolvedPartnerName },
+      });
+      if (!linkedPartner) {
+        return NextResponse.json(
+          { error: `Partner "${resolvedPartnerName}" not found.` },
+          { status: 404 }
+        );
+      }
       const member = await prisma.partnerTeamMember.create({
         data: {
-          name: payload.name,
-          email: payload.email,
-          jobTitle: payload.jobTitle || "Partner Rep",
-          phone: payload.phone || "+65 6000 1111",
-          partnerName: payload.partnerName || "Apex Cloud Solutions Pte Ltd",
+          name: String(payload.name || "").trim(),
+          email: String(payload.email || "").trim(),
+          jobTitle: String(payload.jobTitle || "").trim(),
+          phone: String(payload.phone || "").trim(),
+          partnerName: linkedPartner.name,
           role: payload.role || "Sales Rep",
           status: payload.portalAccess === false ? "Inactive" : "Sent",
-          invitedAt: new Date().toISOString().slice(0, 10),
+          invitedAt: todayIso,
         },
       });
       let activationUrl = "";
       let activationToken = "";
-      if (payload.portalAccess !== false) {
-        const linkedPartner = await prisma.partner.findFirst({
-          where: { name: member.partnerName },
-        });
+      if (payload.portalAccess !== false && member.email) {
         const sent = await sendAndLogTransactionalEmail({
           to: member.email,
-          subject: `Invitation: Join ${member.partnerName} on R-PRM Partner Portal`,
-          body: `Hi ${member.name},\n\nYou have been invited as ${member.role} for ${member.partnerName}.`,
+          subject: `Invitation: Join ${member.partnerName} on {{workspace.name}} Partner Portal`,
+          body: `Hi ${member.name},\n\nYou have been invited as ${member.role} for ${member.partnerName} on {{workspace.name}}.`,
           templateName: "Invite partner team member",
           issueActivationFor: {
             email: member.email,
             name: member.name,
-            partnerId: linkedPartner?.id || "prt-1",
-            partnerName: member.partnerName,
+            partnerId: linkedPartner.id,
+            partnerName: linkedPartner.name,
             role: member.role === "Sales Rep" ? "SalesRep" : member.role,
           },
         });
@@ -460,7 +534,7 @@ export async function executeResourceMutation(
             where: { name: first.partnerName },
             data: {
               contactFirstName: parts[0] || first.name,
-              contactLastName: parts.slice(1).join(" ") || "Contact",
+              contactLastName: parts.slice(1).join(" "),
               contactEmail: first.email,
               contactJobTitle: first.jobTitle,
               contactPhone: first.phone,
@@ -482,32 +556,50 @@ export async function executeResourceMutation(
       const partnerName =
         session.identityType === "partner" && session.partnerName
           ? session.partnerName
-          : payload.sourcePartnerName || "Apex Cloud Solutions Pte Ltd";
+          : String(payload.sourcePartnerName || "").trim();
+      if (!partnerName) {
+        return NextResponse.json(
+          { error: "Source partner is required to submit a lead." },
+          { status: 400 }
+        );
+      }
+      const linkedPartner = await prisma.partner.findFirst({
+        where: { name: partnerName },
+      });
       const lead = await prisma.lead.create({
         data: {
-          firstName: payload.firstName,
-          lastName: payload.lastName,
-          company: payload.company,
-          jobTitle: payload.jobTitle || "Decision Maker",
-          email: payload.email || "lead@company.example.com",
-          phone: payload.phone || "+65 9000 0000",
-          country: payload.country || "Singapore",
-          retailBrand: payload.retailBrand || payload.company,
-          outletsCount: Number(payload.outletsCount) || 1,
-          website: payload.website || "https://company.example.com",
-          posSolution: payload.posSolution || "CloudPOS Pro",
+          firstName: String(payload.firstName || "").trim(),
+          lastName: String(payload.lastName || "").trim(),
+          company: String(payload.company || "").trim(),
+          jobTitle: String(payload.jobTitle || "").trim(),
+          email: String(payload.email || "").trim(),
+          phone: String(payload.phone || "").trim(),
+          country: String(payload.country || "").trim(),
+          retailBrand: String(payload.retailBrand || payload.company || "").trim(),
+          outletsCount: Number(payload.outletsCount) || 0,
+          website: String(payload.website || "").trim(),
+          posSolution: String(payload.posSolution || "").trim(),
           remarks: payload.customProperties
             ? `${payload.remarks || ""} [CustomProps: ${JSON.stringify(
                 payload.customProperties
               )}]`.trim()
-            : payload.remarks || "",
+            : String(payload.remarks || "").trim(),
           status: "Pending",
+          ownerId:
+            session.identityType === "coworker"
+              ? payload.ownerId || session.userId
+              : linkedPartner?.ownerId || ws.defaultOwnerId,
+          owner:
+            session.identityType === "coworker"
+              ? payload.owner || session.name
+              : linkedPartner?.owner || ws.defaultOwnerName,
           source: payload.source || "Partner Portal",
+          sourcePartnerId: linkedPartner?.id || null,
           sourcePartnerName: partnerName,
           assignedPartner: payload.assignedPartner || partnerName,
           assignedContact: payload.assignedContact || session.name,
-          assignedDate: new Date().toISOString().slice(0, 10),
-          deadline: payload.deadline || "2026-12-31",
+          assignedDate: todayIso,
+          deadline: payload.deadline || "",
         },
       });
       await writeAudit({
@@ -526,10 +618,7 @@ export async function executeResourceMutation(
         data: {
           status: payload.status,
           acceptedBy: payload.status === "Accepted" ? session.name : "",
-          acceptedDate:
-            payload.status === "Accepted"
-              ? new Date().toISOString().slice(0, 10)
-              : "",
+          acceptedDate: payload.status === "Accepted" ? todayIso : "",
         },
       });
       await writeAudit({
@@ -546,30 +635,63 @@ export async function executeResourceMutation(
       const lead = await prisma.lead.findUnique({
         where: { id: payload.leadId },
       });
-      if (!lead)
+      if (!lead) {
         return NextResponse.json({ error: "Lead not found" }, { status: 404 });
-      const amount = Number(payload.amount) || 18000;
-      const fx = convertWithDatedFx(amount, payload.currency || "SGD");
+      }
+      // §3.5.1: Amount has NO default; require an explicit positive amount from the admin
+      const rawAmount = payload.amount;
+      const amount = Number(rawAmount);
+      if (
+        rawAmount === undefined ||
+        rawAmount === null ||
+        String(rawAmount).trim() === "" ||
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        return NextResponse.json(
+          { error: "Deal amount is required and must be greater than zero." },
+          { status: 400 }
+        );
+      }
+      const dealCurrency = String(payload.currency || ws.mainCurrency)
+        .trim()
+        .toUpperCase();
+      const fx = convertWithDatedFx(amount, dealCurrency, ws.mainCurrency);
+      const linkedPartner = lead.sourcePartnerId
+        ? await prisma.partner.findUnique({
+            where: { id: lead.sourcePartnerId },
+          })
+        : await prisma.partner.findFirst({
+            where: { name: lead.sourcePartnerName },
+          });
+
       const deal = await prisma.deal.create({
         data: {
           name:
             payload.dealName ||
-            `OPP - ${lead.company} (${lead.retailBrand || "Rollout"})`,
-          owner: lead.owner || "Alex Morgan",
-          clientName: `${lead.firstName} ${lead.lastName}`,
+            `OPP - ${lead.company}${
+              lead.retailBrand && lead.retailBrand !== lead.company
+                ? ` (${lead.retailBrand})`
+                : ""
+            }`,
+          ownerId: lead.ownerId || session.userId,
+          owner: lead.owner || session.name,
+          clientName: `${lead.firstName} ${lead.lastName}`.trim(),
           company: lead.company,
           amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgdMinor,
+          amountBase: fx.amountBaseMinor,
           partnerName: lead.sourcePartnerName,
+          partnerId: linkedPartner?.id || null,
+          programName: linkedPartner?.programName || "",
           assignedContact: lead.assignedContact,
           status: "Accepted",
           stage: "Discovery Stage",
-          stageEnteredAt: new Date().toISOString().slice(0, 10),
+          stageEnteredAt: todayIso,
           source: "Lead Conversion",
           sourcePartnerName: lead.sourcePartnerName,
-          closeDate: payload.closeDate || "2027-01-31",
-          expirationDate: "2027-04-30",
+          closeDate: payload.closeDate || "",
+          expirationDate: payload.expirationDate || "",
           sourceLeadId: lead.id,
         },
       });
@@ -582,47 +704,75 @@ export async function executeResourceMutation(
         action: "CREATE",
         objectType: "Deal",
         objectId: deal.id,
-        summary: `Converted lead "${lead.firstName} ${lead.lastName}" to Deal "${deal.name}"`,
+        summary: `Converted lead "${lead.firstName} ${lead.lastName}" to Deal "${deal.name}" (${fx.currency} ${fx.originalAmount} / ${ws.mainCurrency} ${fx.amountBase})`,
       });
       return NextResponse.json({ ok: true, deal });
     }
 
     case "CREATE_DEAL": {
-      const amount = Number(payload.amount) || 15000;
-      const fx = convertWithDatedFx(amount, payload.currency || "SGD");
+      const amount = Number(payload.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return NextResponse.json(
+          { error: "Deal amount must be greater than zero." },
+          { status: 400 }
+        );
+      }
       const partnerName =
         session.identityType === "partner" && session.partnerName
           ? session.partnerName
-          : payload.partnerName || "Apex Cloud Solutions Pte Ltd";
+          : String(payload.partnerName || "").trim();
+      if (!partnerName) {
+        return NextResponse.json(
+          { error: "Associated partner is required to register a deal." },
+          { status: 400 }
+        );
+      }
+      const linkedPartner = await prisma.partner.findFirst({
+        where: { name: partnerName },
+      });
+      const fx = convertWithDatedFx(
+        amount,
+        payload.currency || ws.mainCurrency,
+        ws.mainCurrency
+      );
       const deal = await prisma.deal.create({
         data: {
-          name: payload.name,
-          owner: payload.owner || "Alex Morgan",
-          clientName: payload.clientName || "Enterprise Buyer",
-          company: payload.company || payload.name,
+          name: String(payload.name || "").trim(),
+          ownerId:
+            session.identityType === "coworker"
+              ? payload.ownerId || session.userId
+              : linkedPartner?.ownerId || ws.defaultOwnerId,
+          owner:
+            session.identityType === "coworker"
+              ? payload.owner || session.name
+              : linkedPartner?.owner || ws.defaultOwnerName,
+          clientName: String(payload.clientName || payload.company || "").trim(),
+          company: String(payload.company || payload.name || "").trim(),
           amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgdMinor,
+          amountBase: fx.amountBaseMinor,
           partnerName,
+          partnerId: linkedPartner?.id || null,
+          programName: linkedPartner?.programName || "",
           assignedContact: payload.assignedContact || session.name,
           status: payload.status || "Accepted",
           stage: payload.stage || "Discovery Stage",
-          stageEnteredAt: new Date().toISOString().slice(0, 10),
+          stageEnteredAt: todayIso,
           source: "Partner Registration",
           sourcePartnerName: partnerName,
-          closeDate: payload.closeDate || "2027-01-15",
-          expirationDate: payload.expirationDate || "2027-04-15",
+          closeDate: payload.closeDate || "",
+          expirationDate: payload.expirationDate || "",
           dealType: payload.dealType || "New Business",
-          subscriptionPlan: payload.subscriptionPlan || "Enterprise Annual",
+          subscriptionPlan: payload.subscriptionPlan || "",
           comment: payload.customProperties
             ? `${payload.comment || ""} [CustomProps: ${JSON.stringify(
                 payload.customProperties
               )}]`.trim()
-            : payload.comment || "",
+            : String(payload.comment || "").trim(),
           lineItemsJson: JSON.stringify([
             {
               id: "li-1",
-              product: "R-PRM Platform Annual Subscription",
+              product: payload.subscriptionPlan || "Subscription",
               qty: 1,
               unitPrice: amount,
               total: amount,
@@ -635,7 +785,7 @@ export async function executeResourceMutation(
         action: "CREATE",
         objectType: "Deal",
         objectId: deal.id,
-        summary: `Registered deal "${deal.name}" for ${partnerName} (SGD ${fx.amountSgd})`,
+        summary: `Registered deal "${deal.name}" for ${partnerName} (${ws.mainCurrency} ${fx.amountBase})`,
       });
       return NextResponse.json({ ok: true, deal });
     }
@@ -646,7 +796,7 @@ export async function executeResourceMutation(
         data: {
           stage: payload.stage,
           status: payload.status || undefined,
-          stageEnteredAt: new Date().toISOString().slice(0, 10),
+          stageEnteredAt: todayIso,
         },
       });
 
@@ -681,7 +831,9 @@ export async function executeResourceMutation(
                 partnerName: deal.partnerName,
               },
               partner,
-              programs
+              programs,
+              undefined,
+              ws.mainCurrency
             );
             for (const g of generated) {
               const newReward = await prisma.reward.create({
@@ -692,7 +844,7 @@ export async function executeResourceMutation(
                   type: g.type,
                   amount: g.amountMinor,
                   currency: g.currency,
-                  amountSgd: g.amountSgdMinor,
+                  amountBase: g.amountBaseMinor,
                   fromActivity: g.fromActivity,
                   fromRewardRule: g.fromRewardRule,
                   status: g.status,
@@ -704,7 +856,7 @@ export async function executeResourceMutation(
                 action: "CREATE",
                 objectType: "Reward",
                 objectId: newReward.id,
-                summary: `Generated tier reward ${newReward.rewardNumber} (SGD ${g.amountSgd}, ${g.fromRewardRule}) for ${g.partnerName}`,
+                summary: `Generated tier reward ${newReward.rewardNumber} (${ws.mainCurrency} ${g.amountBase}, ${g.fromRewardRule}) for ${g.partnerName}`,
               });
             }
           }
@@ -723,13 +875,17 @@ export async function executeResourceMutation(
       const existing = await prisma.deal.findUnique({
         where: { id: payload.dealId },
       });
-      const fx = convertWithDatedFx(newTotal, existing?.currency || "SGD");
+      const fx = convertWithDatedFx(
+        newTotal,
+        existing?.currency || ws.mainCurrency,
+        ws.mainCurrency
+      );
       const deal = await prisma.deal.update({
         where: { id: payload.dealId },
         data: {
           lineItemsJson: JSON.stringify(lineItems),
           amount: fx.originalAmountMinor,
-          amountSgd: fx.amountSgdMinor,
+          amountBase: fx.amountBaseMinor,
         },
       });
       await writeAudit({
@@ -737,7 +893,7 @@ export async function executeResourceMutation(
         action: "UPDATE",
         objectType: "DealLineItems",
         objectId: deal.id,
-        summary: `Updated line items on deal "${deal.name}" (New total: SGD ${fx.amountSgd})`,
+        summary: `Updated line items on deal "${deal.name}" (New total: ${ws.mainCurrency} ${fx.amountBase})`,
       });
       return NextResponse.json({ ok: true, deal });
     }
@@ -746,8 +902,9 @@ export async function executeResourceMutation(
       const deal = await prisma.deal.findUnique({
         where: { id: payload.dealId },
       });
-      if (!deal)
+      if (!deal) {
         return NextResponse.json({ error: "Deal not found" }, { status: 404 });
+      }
       const customer = await prisma.customer.create({
         data: {
           name: deal.company,
@@ -759,14 +916,14 @@ export async function executeResourceMutation(
           status: "Paying",
           source: "Deal Conversion",
           sourcePartnerName: deal.partnerName,
-          becamePayingDate: new Date().toISOString().slice(0, 10),
+          becamePayingDate: todayIso,
           bbid: `BB-${Math.floor(2100 + Math.random() * 900)}`,
           sourceDealId: deal.id,
           subscriptionPlan: deal.subscriptionPlan,
           billingFrequency: "Yearly",
           billingPeriod: "12 Months",
           transactionsCount: 1,
-          revenuesSgd: deal.amountSgd,
+          revenuesBase: deal.amountBase,
         },
       });
       await writeAudit({
@@ -782,20 +939,20 @@ export async function executeResourceMutation(
     case "CREATE_CUSTOMER": {
       const customer = await prisma.customer.create({
         data: {
-          name: payload.name,
-          email: payload.email,
+          name: String(payload.name || "").trim(),
+          email: String(payload.email || "").trim(),
           status: payload.status || "Paying",
           source: payload.source || "Manual Entry",
-          sourcePartnerName:
-            payload.sourcePartnerName || "Apex Cloud Solutions Pte Ltd",
-          becamePayingDate:
-            payload.becamePayingDate || new Date().toISOString().slice(0, 10),
+          sourcePartnerName: String(payload.sourcePartnerName || "").trim(),
+          becamePayingDate: payload.becamePayingDate || todayIso,
           bbid: payload.bbid || `BB-${Math.floor(2100 + Math.random() * 900)}`,
           sourceDealId: payload.sourceDealId || "",
-          subscriptionPlan: payload.subscriptionPlan || "Enterprise Annual",
+          subscriptionPlan: payload.subscriptionPlan || "",
           billingFrequency: payload.billingFrequency || "Yearly",
           billingPeriod: payload.billingPeriod || "12 Months",
-          revenuesSgd: toMinorUnits(Number(payload.revenuesSgd) || 12000),
+          revenuesBase: toMinorUnits(
+            Number(payload.revenuesBase ?? payload.amount ?? 0) || 0
+          ),
         },
       });
       await writeAudit({
@@ -809,23 +966,38 @@ export async function executeResourceMutation(
     }
 
     case "CREATE_TRANSACTION": {
-      const amount = Number(payload.amount) || 9500;
-      const fx = convertWithDatedFx(amount, payload.currency || "SGD");
-      const partnerName =
-        payload.partnerName || "Apex Cloud Solutions Pte Ltd";
+      const amount = Number(payload.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return NextResponse.json(
+          { error: "Transaction amount must be greater than zero." },
+          { status: 400 }
+        );
+      }
+      const partnerName = String(payload.partnerName || "").trim();
+      if (!partnerName) {
+        return NextResponse.json(
+          { error: "Partner name is required to record a transaction." },
+          { status: 400 }
+        );
+      }
+      const fx = convertWithDatedFx(
+        amount,
+        payload.currency || ws.mainCurrency,
+        ws.mainCurrency
+      );
       const tx = await prisma.transaction.create({
         data: {
           name:
             payload.name ||
-            `INV-2026-${Math.floor(910 + Math.random() * 90)} · Subscription Invoice`,
+            `INV-${todayIso.slice(0, 4)}-${Math.floor(910 + Math.random() * 90)}`,
           amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgdMinor,
+          amountBase: fx.amountBaseMinor,
           partnerName,
-          customerName: payload.customerName || "Solaris Luxury Resort Group",
-          dealName:
-            payload.dealName || "ENT - Solaris Luxury Resort Group (Annual)",
-          monthKey: payload.monthKey || "11/2026",
+          customerName: String(payload.customerName || "").trim(),
+          dealName: String(payload.dealName || "").trim(),
+          monthKey:
+            payload.monthKey || currentMonthKeyInTimezone(ws.timezone),
         },
       });
 
@@ -843,7 +1015,9 @@ export async function executeResourceMutation(
             partnerName: tx.partnerName,
           },
           partner,
-          programs
+          programs,
+          undefined,
+          ws.mainCurrency
         );
         for (const g of generated) {
           await prisma.reward.create({
@@ -854,7 +1028,7 @@ export async function executeResourceMutation(
               type: g.type,
               amount: g.amountMinor,
               currency: g.currency,
-              amountSgd: g.amountSgdMinor,
+              amountBase: g.amountBaseMinor,
               fromActivity: g.fromActivity,
               fromRewardRule: g.fromRewardRule,
               status: g.status,
@@ -869,23 +1043,40 @@ export async function executeResourceMutation(
         action: "CREATE",
         objectType: "Transaction",
         objectId: tx.id,
-        summary: `Recorded transaction "${tx.name}" (SGD ${fx.amountSgd}) and computed tier rewards`,
+        summary: `Recorded transaction "${tx.name}" (${ws.mainCurrency} ${fx.amountBase}) and computed tier rewards`,
       });
       return NextResponse.json({ ok: true, transaction: tx });
     }
 
     case "CREATE_REWARD": {
-      const amount = Number(payload.amount) || 1000;
-      const fx = convertWithDatedFx(amount, payload.currency || "SGD");
+      const amount = Number(payload.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return NextResponse.json(
+          { error: "Reward amount must be greater than zero." },
+          { status: 400 }
+        );
+      }
+      const partnerName = String(payload.partnerName || "").trim();
+      if (!partnerName) {
+        return NextResponse.json(
+          { error: "Partner name is required to create a reward." },
+          { status: 400 }
+        );
+      }
+      const fx = convertWithDatedFx(
+        amount,
+        payload.currency || ws.mainCurrency,
+        ws.mainCurrency
+      );
       const reward = await prisma.reward.create({
         data: {
           rewardNumber: `RW-${Math.floor(1050 + Math.random() * 8900)}`,
-          partnerName: payload.partnerName || "Apex Cloud Solutions Pte Ltd",
-          recipientName: payload.partnerName || "Apex Cloud Solutions Pte Ltd",
+          partnerName,
+          recipientName: partnerName,
           type: payload.type || "Cash",
           amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgdMinor,
+          amountBase: fx.amountBaseMinor,
           fromActivity: payload.fromActivity || "Manual Bonus / Milestone",
           fromRewardRule: payload.fromRewardRule || "One-time Commission Bonus",
           status: "Pending",
@@ -899,7 +1090,7 @@ export async function executeResourceMutation(
         action: "CREATE",
         objectType: "Reward",
         objectId: reward.id,
-        summary: `Created reward ${reward.rewardNumber} (SGD ${fx.amountSgd})`,
+        summary: `Created reward ${reward.rewardNumber} (${ws.mainCurrency} ${fx.amountBase})`,
       });
       return NextResponse.json({ ok: true, reward });
     }
@@ -908,8 +1099,9 @@ export async function executeResourceMutation(
       const existing = await prisma.reward.findUnique({
         where: { id: payload.id },
       });
-      if (!existing)
+      if (!existing) {
         return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
       const nextComment = payload.reason
         ? `${existing.comment || ""} | Refusal reason: ${payload.reason}`.trim()
         : existing.comment;
@@ -934,11 +1126,12 @@ export async function executeResourceMutation(
       const orig = await prisma.reward.findUnique({
         where: { id: payload.id },
       });
-      if (!orig)
+      if (!orig) {
         return NextResponse.json(
           { error: "Original reward not found" },
           { status: 404 }
         );
+      }
       await prisma.reward.update({
         where: { id: orig.id },
         data: {
@@ -956,7 +1149,7 @@ export async function executeResourceMutation(
           type: orig.type,
           amount: -Math.abs(orig.amount),
           currency: orig.currency,
-          amountSgd: -Math.abs(orig.amountSgd),
+          amountBase: -Math.abs(orig.amountBase),
           fromActivity: `CLAWBACK: ${orig.fromActivity}`,
           fromRewardRule: orig.fromRewardRule,
           status: "Clawed back",
@@ -970,15 +1163,19 @@ export async function executeResourceMutation(
         action: "CLAWBACK",
         objectType: "Reward",
         objectId: orig.id,
-        summary: `Clawed back reward ${orig.rewardNumber} -> negative adjustment ${clawbackAdjustment.rewardNumber} (SGD ${clawbackAdjustment.amountSgd})`,
+        summary: `Clawed back reward ${orig.rewardNumber} -> negative adjustment ${clawbackAdjustment.rewardNumber} (${ws.mainCurrency} ${toMajorUnits(clawbackAdjustment.amountBase)})`,
       });
       return NextResponse.json({ ok: true, clawbackAdjustment });
     }
 
     case "CREATE_PAYOUT": {
-      // §16.4 P1: Real relation Reward -> Payout; payout amount is ALWAYS computed from linked rewards; cannot create/pay with zero rewards!
-      const partnerName =
-        payload.partnerName || "Apex Cloud Solutions Pte Ltd";
+      const partnerName = String(payload.partnerName || "").trim();
+      if (!partnerName) {
+        return NextResponse.json(
+          { error: "Partner name is required to create a payout." },
+          { status: 400 }
+        );
+      }
       const eligibleRewards = await prisma.reward.findMany({
         where: {
           partnerName,
@@ -989,26 +1186,31 @@ export async function executeResourceMutation(
       if (eligibleRewards.length === 0) {
         return NextResponse.json(
           {
-            error: `Cannot create payout for "${partnerName}": 0 unbatched eligible rewards found (§16.4 P1)`,
+            error: `Cannot create payout for "${partnerName}": 0 unbatched eligible rewards found`,
           },
           { status: 400 }
         );
       }
-      const sumMinorSgd = eligibleRewards.reduce(
-        (acc, r) => acc + r.amountSgd,
+      const sumMinorBase = eligibleRewards.reduce(
+        (acc, r) => acc + r.amountBase,
         0
       );
-      const payoutNumber = `PO-2026-${Math.floor(10 + Math.random() * 89)}`;
+      const payoutCurrency = String(payload.currency || ws.mainCurrency)
+        .trim()
+        .toUpperCase();
+      const payoutNumber = `PO-${todayIso.slice(0, 4)}-${Math.floor(
+        10 + Math.random() * 89
+      )}`;
       const payout = await prisma.payout.create({
         data: {
           payoutNumber,
           name: payload.name || `Partner Payout Settlement — ${partnerName}`,
           partnerName,
-          amount: sumMinorSgd,
-          currency: "SGD",
-          amountSgd: sumMinorSgd,
-          periodFrom: payload.periodFrom || "2026-01-01",
-          periodTo: payload.periodTo || "2026-11-30",
+          amount: sumMinorBase,
+          currency: payoutCurrency,
+          amountBase: sumMinorBase,
+          periodFrom: payload.periodFrom || `${todayIso.slice(0, 7)}-01`,
+          periodTo: payload.periodTo || todayIso,
           rewardsCount: eligibleRewards.length,
           status: "Ready",
           invoiceRef: `SELF-INV-${Math.floor(100 + Math.random() * 899)}`,
@@ -1027,43 +1229,43 @@ export async function executeResourceMutation(
         action: "CREATE",
         objectType: "Payout",
         objectId: payout.id,
-        summary: `Created payout ${payout.payoutNumber} for ${partnerName} (SGD ${toMajorUnits(sumMinorSgd)} across ${eligibleRewards.length} linked rewards)`,
+        summary: `Created payout ${payout.payoutNumber} for ${partnerName} (${ws.mainCurrency} ${toMajorUnits(sumMinorBase)} across ${eligibleRewards.length} linked rewards)`,
       });
       return NextResponse.json({ ok: true, payout });
     }
 
     case "MARK_PAYOUT_PAID": {
-      // §16.4 P1: A payout cannot be paid with zero linked rewards!
       const existing = await prisma.payout.findUnique({
         where: { id: payload.id },
         include: { rewards: true },
       });
-      if (!existing)
+      if (!existing) {
         return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
       if (!existing.rewards || existing.rewards.length === 0) {
         return NextResponse.json(
           {
-            error: `Cannot mark payout ${existing.payoutNumber} Paid: 0 linked rewards (§16.4 P1)`,
+            error: `Cannot mark payout ${existing.payoutNumber} Paid: 0 linked rewards`,
           },
           { status: 400 }
         );
       }
-      const computedSumMinorSgd = existing.rewards.reduce(
-        (s, r) => s + r.amountSgd,
+      const computedSumMinorBase = existing.rewards.reduce(
+        (s, r) => s + r.amountBase,
         0
       );
       const connectorRes = executePayoutConnector({
         ...existing,
-        amountSgd: toMajorUnits(computedSumMinorSgd),
+        amountBase: toMajorUnits(computedSumMinorBase),
       });
       const payout = await prisma.payout.update({
         where: { id: payload.id },
         data: {
-          amount: computedSumMinorSgd,
-          amountSgd: computedSumMinorSgd,
+          amount: computedSumMinorBase,
+          amountBase: computedSumMinorBase,
           rewardsCount: existing.rewards.length,
           status: "Paid",
-          paidDate: new Date().toISOString().slice(0, 10),
+          paidDate: todayIso,
         },
       });
       await prisma.reward.updateMany({
@@ -1075,7 +1277,7 @@ export async function executeResourceMutation(
         action: "UPDATE",
         objectType: "Payout",
         objectId: payout.id,
-        summary: `Marked payout ${payout.payoutNumber} Paid (SGD ${toMajorUnits(computedSumMinorSgd)}) via ${connectorRes.driver} driver (${connectorRes.settlementReference})`,
+        summary: `Marked payout ${payout.payoutNumber} Paid (${ws.mainCurrency} ${toMajorUnits(computedSumMinorBase)}) via ${connectorRes.driver} driver (${connectorRes.settlementReference})`,
       });
       return NextResponse.json({ ok: true, payout });
     }
@@ -1083,16 +1285,17 @@ export async function executeResourceMutation(
     case "CREATE_TASK": {
       const task = await prisma.task.create({
         data: {
-          name: payload.name,
+          name: String(payload.name || "").trim(),
           status: payload.status || "Upcoming",
           type: payload.type || "Follow-up",
-          dueDate: payload.dueDate || "2026-12-01",
+          dueDate: payload.dueDate || todayIso,
           dueTime: payload.dueTime || "09:00 AM",
           description: payload.description || "",
-          assignedTo: payload.assignedTo || "Alex Morgan",
+          assignedToId: payload.assignedToId || session.userId,
+          assignedTo: payload.assignedTo || session.name,
           associationType: payload.associationType || "Partner",
-          associationName:
-            payload.associationName || "Apex Cloud Solutions Pte Ltd",
+          associationName: String(payload.associationName || "").trim(),
+          createdBy: session.name,
         },
       });
       await writeAudit({
@@ -1109,8 +1312,9 @@ export async function executeResourceMutation(
       const existing = await prisma.task.findUnique({
         where: { id: payload.id },
       });
-      if (!existing)
+      if (!existing) {
         return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
       const nextStatus =
         existing.status === "Completed" ? "Upcoming" : "Completed";
       const task = await prisma.task.update({
@@ -1118,10 +1322,7 @@ export async function executeResourceMutation(
         data: {
           status: nextStatus,
           completedBy: nextStatus === "Completed" ? session.name : "",
-          completedDate:
-            nextStatus === "Completed"
-              ? new Date().toISOString().slice(0, 10)
-              : "",
+          completedDate: nextStatus === "Completed" ? todayIso : "",
         },
       });
       await writeAudit({
@@ -1137,14 +1338,15 @@ export async function executeResourceMutation(
     case "CREATE_BUSINESS_PLAN": {
       const plan = await prisma.businessPlan.create({
         data: {
-          name: payload.name,
-          partnerName: payload.partnerName || "Apex Cloud Solutions Pte Ltd",
-          partnerOwner: payload.partnerOwner || "Alex Morgan",
+          name: String(payload.name || "").trim(),
+          partnerName: String(payload.partnerName || "").trim(),
+          partnerOwner: payload.partnerOwner || session.name,
           status: payload.status || "Active",
           description: payload.description || "",
-          startDate: payload.startDate || "2026-11-01",
-          endDate: payload.endDate || "2027-10-31",
-          achievedPct: Number(payload.achievedPct) || 25,
+          startDate: payload.startDate || todayIso,
+          endDate: payload.endDate || "",
+          achievedPct: Number(payload.achievedPct) || 0,
+          targetRevBase: toMinorUnits(Number(payload.targetRevBase || 0)),
         },
       });
       await writeAudit({
@@ -1158,14 +1360,37 @@ export async function executeResourceMutation(
     }
 
     case "CREATE_PROGRAM": {
-      const first = await prisma.program.findFirst();
       const prog = await prisma.program.create({
         data: {
-          name: payload.name,
-          owner: payload.owner || "Alex Morgan",
-          levelsJson: first?.levelsJson || "[]",
-          autoEmailsJson: first?.autoEmailsJson || "{}",
-          permissionsJson: first?.permissionsJson || "{}",
+          name: String(payload.name || "").trim(),
+          ownerId: payload.ownerId || session.userId,
+          owner: payload.owner || session.name,
+          onboardingPipelineId:
+            String(payload.onboardingPipelineId || "Default Onboarding").trim(),
+          levelsJson:
+            typeof payload.levelsJson === "string"
+              ? payload.levelsJson
+              : JSON.stringify([
+                  {
+                    id: `lvl-${Date.now()}`,
+                    name: "Standard",
+                    badgeColor: "blue",
+                    rewards: [],
+                    benefits: [],
+                    requirements: [],
+                  },
+                ]),
+          autoEmailsJson:
+            typeof payload.autoEmailsJson === "string"
+              ? payload.autoEmailsJson
+              : "{}",
+          permissionsJson:
+            typeof payload.permissionsJson === "string"
+              ? payload.permissionsJson
+              : "{}",
+          termsRequired: Boolean(payload.termsRequired ?? true),
+          termsUrl: String(payload.termsUrl || ""),
+          revenueStrategy: payload.revenueStrategy || null,
           partnerCount: 0,
         },
       });
@@ -1183,15 +1408,18 @@ export async function executeResourceMutation(
       const source = await prisma.program.findUnique({
         where: { id: payload.id },
       });
-      if (!source)
+      if (!source) {
         return NextResponse.json(
           { error: "Program not found" },
           { status: 404 }
         );
+      }
       const copy = await prisma.program.create({
         data: {
           name: `${source.name} (Copy)`,
-          owner: source.owner,
+          ownerId: session.userId,
+          owner: session.name,
+          onboardingPipelineId: source.onboardingPipelineId,
           levelsJson: source.levelsJson,
           autoEmailsJson: source.autoEmailsJson,
           termsRequired: source.termsRequired,
@@ -1226,17 +1454,24 @@ export async function executeResourceMutation(
     }
 
     case "CREATE_TRACKING_LINK": {
+      const programId = String(payload.programId || "").trim();
+      if (!programId) {
+        return NextResponse.json(
+          { error: "Program ID is required to create a tracking link." },
+          { status: 400 }
+        );
+      }
       const link = await prisma.trackingLink.create({
         data: {
-          name: payload.name,
-          targetUrl: payload.targetUrl,
-          programId: payload.programId || "prog-strategic",
-          partnerName: payload.partnerName || "Apex Cloud Solutions Pte Ltd",
-          uniqueVisitors: 1,
+          name: String(payload.name || "").trim(),
+          targetUrl: String(payload.targetUrl || "").trim(),
+          programId,
+          partnerName: String(payload.partnerName || "").trim(),
+          uniqueVisitors: 0,
           leadsCount: 0,
           customersCount: 0,
           transactionsCount: 0,
-          revenuesSgd: 0,
+          revenuesBase: 0,
         },
       });
       await writeAudit({
@@ -1249,285 +1484,7 @@ export async function executeResourceMutation(
       return NextResponse.json({ ok: true, link });
     }
 
-    case "CREATE_ACCOUNT_RECORD": {
-      const acc = await prisma.accountRecord.create({
-        data: {
-          accountName: payload.accountName,
-          type: payload.type || "Prospect",
-          ownerName: payload.ownerName || "Alex Morgan",
-          ownerEmail: payload.ownerEmail || "alex@r-prm.example.com",
-          source: payload.source || "CSV Account Import",
-          importedDate: new Date().toISOString().slice(0, 10),
-          hasOverlap: true,
-          partnerName: payload.partnerName || "Apex Cloud Solutions Pte Ltd",
-          partnerAccountName:
-            payload.partnerAccountName || payload.accountName,
-          partnerAccountType: payload.partnerAccountType || "Customer",
-          partnerOwnerName: payload.partnerOwnerName || "Jordan Lee",
-          partnerOwnerEmail: "jordan.lee@apexcloud.example.com",
-          overlapDate: new Date().toISOString().slice(0, 10),
-        },
-      });
-      await writeAudit({
-        session,
-        action: "CREATE",
-        objectType: "AccountRecord",
-        objectId: acc.id,
-        summary: `Mapped account "${acc.accountName}"`,
-      });
-      return NextResponse.json({ ok: true, account: acc });
-    }
-
-    case "CREATE_COLLABORATION": {
-      const col = await prisma.collaboration.create({
-        data: {
-          name: payload.name,
-          status: payload.status || "New",
-          owner: payload.owner || "Alex Morgan",
-          partnerName: payload.partnerName || "Apex Cloud Solutions Pte Ltd",
-          assignedContact: payload.assignedContact || "Jordan Lee",
-          accountName:
-            payload.accountName || "Aura Luxury Hospitality Group",
-          lastActivityDate: new Date().toISOString().slice(0, 10),
-        },
-      });
-      await writeAudit({
-        session,
-        action: "CREATE",
-        objectType: "Collaboration",
-        objectId: col.id,
-        summary: `Created collaboration "${col.name}"`,
-      });
-      return NextResponse.json({ ok: true, collaboration: col });
-    }
-
-    case "CREATE_DATA_SOURCE": {
-      const ds = await prisma.dataSource.create({
-        data: {
-          name: payload.name,
-          status: "Active",
-          sharedWith: payload.sharedWith || "All Strategic Partners",
-          type: payload.type || "CSV Upload",
-          accountType: payload.accountType || "Customers & Prospects",
-          lastImportedDate: new Date().toISOString().slice(0, 10),
-          createdBy: session.name,
-        },
-      });
-      if (Array.isArray(payload.csvAccounts)) {
-        for (const row of payload.csvAccounts) {
-          await prisma.accountRecord.create({
-            data: {
-              accountName: row.accountName,
-              type: row.yourType || "Prospect",
-              ownerName: session.name,
-              ownerEmail: session.email,
-              source: payload.name,
-              importedDate: new Date().toISOString().slice(0, 10),
-              hasOverlap: true,
-              partnerName: row.partnerName || "Apex Cloud Solutions Pte Ltd",
-              partnerAccountName: row.partnerAccountName || row.accountName,
-              partnerAccountType: row.partnerType || "Customer",
-              partnerOwnerName: "Jordan Lee",
-              partnerOwnerEmail: "jordan.lee@apexcloud.example.com",
-              overlapDate: new Date().toISOString().slice(0, 10),
-            },
-          });
-        }
-      }
-      await writeAudit({
-        session,
-        action: "CREATE",
-        objectType: "DataSource",
-        objectId: ds.id,
-        summary: `Imported account mapping data source "${ds.name}"`,
-      });
-      return NextResponse.json({ ok: true, dataSource: ds });
-    }
-
-    case "CREATE_MANAGE_ITEM": {
-      const item = await prisma.manageItem.create({
-        data: {
-          category: payload.category,
-          name: payload.name,
-          subtitle: payload.subtitle || "",
-          status: payload.status || "Active",
-          metadataJson: JSON.stringify(payload.metadata || {}),
-        },
-      });
-      await writeAudit({
-        session,
-        action: "CREATE",
-        objectType: `Manage:${payload.category}`,
-        objectId: item.id,
-        summary: `Created ${payload.category} item "${item.name}"`,
-      });
-      return NextResponse.json({ ok: true, item });
-    }
-
-    case "UPDATE_MANAGE_ITEM": {
-      const existing = await prisma.manageItem.findUnique({
-        where: { id: payload.id },
-      });
-      let mergedMeta = {};
-      if (existing?.metadataJson) {
-        try {
-          mergedMeta = JSON.parse(existing.metadataJson);
-        } catch {
-          mergedMeta = {};
-        }
-      }
-      if (payload.metadata) {
-        mergedMeta = { ...mergedMeta, ...payload.metadata };
-      }
-      const item = await prisma.manageItem.update({
-        where: { id: payload.id },
-        data: {
-          name: payload.name ?? existing?.name,
-          subtitle: payload.subtitle ?? existing?.subtitle,
-          status: payload.status ?? existing?.status,
-          metadataJson: JSON.stringify(mergedMeta),
-        },
-      });
-      await writeAudit({
-        session,
-        action: "UPDATE",
-        objectType: `Manage:${item.category}`,
-        objectId: item.id,
-        summary: `Updated ${item.category} item "${item.name}"`,
-      });
-      return NextResponse.json({ ok: true, item });
-    }
-
-    case "ASSIGN_GROUP_PARTNERS": {
-      const { groupName, partnerIds } = payload;
-      if (Array.isArray(partnerIds) && partnerIds.length > 0) {
-        await prisma.partner.updateMany({
-          where: { id: { in: partnerIds } },
-          data: { groupName },
-        });
-      }
-      await writeAudit({
-        session,
-        action: "UPDATE",
-        objectType: "PartnerGroup",
-        objectId: groupName,
-        summary: `Assigned ${partnerIds?.length || 0} partners to group "${groupName}"`,
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    case "TOGGLE_MANAGE_ITEM_STATUS": {
-      const item = await prisma.manageItem.update({
-        where: { id: payload.id },
-        data: { status: payload.status },
-      });
-      await writeAudit({
-        session,
-        action: "UPDATE",
-        objectType: `Manage:${item.category}`,
-        objectId: item.id,
-        summary: `Toggled ${item.name} status to ${payload.status}`,
-      });
-      return NextResponse.json({ ok: true, item });
-    }
-
-    case "DELETE_MANAGE_ITEM": {
-      await prisma.manageItem.delete({ where: { id: payload.id } });
-      await writeAudit({
-        session,
-        action: "DELETE",
-        objectType: "ManageItem",
-        objectId: payload.id,
-        summary: `Deleted manage item ${payload.id}`,
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    case "SEND_EMAIL": {
-      const result = await sendAndLogTransactionalEmail({
-        to: payload.to,
-        subject: payload.subject,
-        body: payload.body,
-        templateName: payload.templateName,
-        mergeFields: payload.mergeFields,
-      });
-      await writeAudit({
-        session,
-        action: "EMAIL",
-        objectType: "EmailOutbox",
-        objectId: result.emailLog.id,
-        summary: `Sent email "${result.emailLog.name}" to ${payload.to}`,
-      });
-      return NextResponse.json({ ok: true, ...result });
-    }
-
-    case "LOG_IMPERSONATION": {
-      await writeAudit({
-        session,
-        action: "IMPERSONATE",
-        objectType: "PartnerPortal",
-        objectId: payload.partnerId || "prt-1",
-        summary: `Admin ${session.email} opened Partner Portal impersonation session as "${payload.partnerName}"`,
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    case "CREATE_NOTE": {
-      const note = await prisma.noteItem.create({
-        data: {
-          entityType: payload.entityType,
-          entityId: payload.entityId,
-          author: session.name || "Alex Morgan",
-          content: payload.content,
-          isShared: payload.isShared ?? true,
-        },
-      });
-      await writeAudit({
-        session,
-        action: "CREATE",
-        objectType: "Note",
-        objectId: note.id,
-        summary: `Added note on ${payload.entityType} (${payload.entityId})`,
-      });
-      return NextResponse.json({ ok: true, note });
-    }
-
-    case "SAVE_SETTING": {
-      // §16.2 S12: Never allow saving SMTP/Gmail credentials in AppSetting!
-      if (payload.key === "smtp_config") {
-        return NextResponse.json(
-          {
-            error:
-              "SMTP credentials come from environment variables only (EMAIL_DRIVER, SMTP_HOST, SMTP_USER, SMTP_PASS) and are never stored in the database (§16.2 S12).",
-          },
-          { status: 400 }
-        );
-      }
-      const setting = await prisma.appSetting.upsert({
-        where: { key: payload.key },
-        update: {
-          valueJson: JSON.stringify(payload.value),
-          updatedAt: new Date(),
-        },
-        create: {
-          key: payload.key,
-          valueJson: JSON.stringify(payload.value),
-        },
-      });
-      await writeAudit({
-        session,
-        action: "UPDATE",
-        objectType: "AppSetting",
-        objectId: payload.key,
-        summary: `Updated workspace setting "${payload.key}"`,
-      });
-      return NextResponse.json({ ok: true, setting });
-    }
-
     default:
-      return NextResponse.json(
-        { error: `Unknown action: ${action}` },
-        { status: 400 }
-      );
+      return executeWorkspaceAdminMutation(session, action, payload, todayIso);
   }
 }

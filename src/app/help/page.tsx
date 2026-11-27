@@ -2,37 +2,45 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import { usePrm } from "@/context/PrmContext";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 import { Search, BookOpen, Code2, ShieldCheck, Layers } from "lucide-react";
 
 export default function HelpPage() {
   const [q, setQ] = useState("");
+  const { session, settings } = usePrm();
+
+  const acct = settings?.account_settings || {};
+  const workspaceName = acct.accountName || "Workspace";
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
+  const firstName = session?.name ? String(session.name).split(" ")[0] : "";
 
   const guides = [
     {
       title: "Getting Started with Partner Programs & Tier Levels",
       category: "Programs",
-      desc: "Configure Silver, Gold, and Platinum commission structures, requirements, and role permissions.",
+      desc: "Configure tier commission structures, qualification requirements, and portal role permissions.",
       href: "/programs/views/all",
       icon: BookOpen,
     },
     {
       title: "3×3 Account Mapping & Co-Selling Overlaps",
       category: "Account Mapping",
-      desc: "Sync your CRM or upload CSV account rosters to spot mutual customer/prospect overlaps.",
+      desc: "Upload CSV account rosters to identify mutual customer and prospect overlaps by domain and company name.",
       href: "/account-mapping-overview",
       icon: Layers,
     },
     {
-      title: "Installing the r.js Referral Tracking Snippet & API Tokens",
+      title: "Installing the Referral Tracking Snippet & API Tokens",
       category: "Developers",
       desc: "Embed referral tracking on your marketing site and authenticate REST webhooks.",
-      href: "/account/integration",
+      href: "/account?tab=Integration",
       icon: Code2,
     },
     {
       title: "Automating Multi-Currency Commission Rewards & Payouts",
       category: "Finance",
-      desc: "Validate pending rewards and generate batch settlements in SGD, USD, EUR, or MYR.",
+      desc: `Validate pending rewards and generate batch settlements in ${baseCurrency} and foreign currencies.`,
       href: "/payouts/views/all",
       icon: ShieldCheck,
     },
@@ -48,17 +56,19 @@ export default function HelpPage() {
     <div className="max-w-5xl mx-auto px-6 py-10 space-y-8">
       <div className="bg-gradient-to-r from-blue-700 to-blue-600 rounded-2xl p-8 text-white shadow-lg space-y-4">
         <h1 className="text-2xl font-extrabold">
-          Need help Alex? We got you — R-PRM Knowledge Base
+          {firstName ? `Need help, ${firstName}?` : "Need help?"} —{" "}
+          {workspaceName} Knowledge Base
         </h1>
         <p className="text-xs text-blue-100">
-          Search step-by-step partner management guides, API documentation, and onboarding checklists
+          Search step-by-step partner management guides, API documentation, and
+          onboarding checklists
         </p>
         <div className="relative max-w-xl">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search articles, e.g. Deal Registration, Account Mapping, r.js..."
+            placeholder="Search articles, e.g. Deal Registration, Account Mapping..."
             className="w-full pl-10 pr-4 py-2.5 rounded-xl text-xs text-slate-900 focus:outline-none"
           />
         </div>

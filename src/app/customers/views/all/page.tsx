@@ -4,28 +4,53 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { EntityListToolbar, StatusBadge } from "@/components/SharedEngines";
+import {
+  SUPPORTED_CURRENCIES,
+  currentIsoDateInTimezone,
+} from "@/lib/prmEngine";
 import { X } from "lucide-react";
 
 export default function CustomersListPage() {
-  const { customers, partners, mutate } = usePrm();
+  const { customers, partners, deals, settings, mutate } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
 
+  const acct = settings?.account_settings || {};
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
+
   const [form, setForm] = useState({
     name: "",
     email: "",
-    becamePayingDate: "2026-11-24",
-    bbid: "BB-2099",
-    sourceDealId: "deal-1",
-    subscriptionPlan: "Enterprise Annual",
+    becamePayingDate: "",
+    bbid: "",
+    sourceDealId: "",
+    subscriptionPlan: "",
     billingFrequency: "Yearly",
     billingPeriod: "12 Months",
     canceledDate: "",
-    sourcePartnerName: "Apex Cloud Solutions Pte Ltd",
+    sourcePartnerName: "",
     source: "Deal Conversion",
-    revenuesSgd: "18000",
+    revenuesBase: "",
   });
+
+  const openModal = () => {
+    setForm({
+      name: "",
+      email: "",
+      becamePayingDate: currentIsoDateInTimezone(acct.timezone),
+      bbid: "",
+      sourceDealId: "",
+      subscriptionPlan: "",
+      billingFrequency: "Yearly",
+      billingPeriod: "12 Months",
+      canceledDate: "",
+      sourcePartnerName: partners[0]?.name || "",
+      source: "Deal Conversion",
+      revenuesBase: "",
+    });
+    setModalOpen(true);
+  };
 
   const filtered = customers.filter((c) => {
     if (activeView === "Paying" && c.status !== "Paying") return false;
@@ -45,10 +70,9 @@ export default function CustomersListPage() {
     await mutate(
       "CREATE_CUSTOMER",
       form,
-      `Customer "${form.name}" added to R-PRM!`
+      `Customer "${form.name}" added!`
     );
     setModalOpen(false);
-    setForm({ ...form, name: "", email: "" });
   };
 
   return (
@@ -62,7 +86,7 @@ export default function CustomersListPage() {
         search={search}
         onSearchChange={setSearch}
         primaryActionLabel="Add a new customer"
-        onPrimaryAction={() => setModalOpen(true)}
+        onPrimaryAction={openModal}
       />
 
       <div className="max-w-[1440px] mx-auto px-6 py-5">
@@ -79,7 +103,9 @@ export default function CustomersListPage() {
                 <th className="py-3 px-3 font-semibold text-right">
                   Transactions
                 </th>
-                <th className="py-3 px-3 font-semibold text-right">Revenues</th>
+                <th className="py-3 px-3 font-semibold text-right">
+                  Revenues ({baseCurrency})
+                </th>
                 <th className="py-3 px-4 font-semibold">Became paying date</th>
               </tr>
             </thead>
@@ -97,19 +123,21 @@ export default function CustomersListPage() {
                   </td>
                   <td className="py-3 px-3 text-slate-600">{c.source}</td>
                   <td className="py-3 px-3 font-medium text-blue-700">
-                    {c.sourcePartnerName}
+                    {c.sourcePartnerName || "—"}
                   </td>
                   <td className="py-3 px-3 text-slate-600">
-                    {c.subscriptionPlan} ({c.billingFrequency})
+                    {c.subscriptionPlan
+                      ? `${c.subscriptionPlan} (${c.billingFrequency})`
+                      : c.billingFrequency}
                   </td>
                   <td className="py-3 px-3 text-right font-semibold">
                     {c.transactionsCount}
                   </td>
                   <td className="py-3 px-3 text-right font-bold text-slate-900">
-                    SGD {c.revenuesSgd.toLocaleString()}
+                    {baseCurrency} {(c.revenuesBase || 0).toLocaleString()}
                   </td>
                   <td className="py-3 px-4 text-slate-500">
-                    {c.becamePayingDate}
+                    {c.becamePayingDate || "—"}
                   </td>
                 </tr>
               ))}
@@ -140,6 +168,7 @@ export default function CustomersListPage() {
                     required
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    placeholder="Acme Ltd"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -152,6 +181,7 @@ export default function CustomersListPage() {
                     type="email"
                     value={form.email}
                     onChange={(e) => setForm({ ...form, email: e.target.value })}
+                    placeholder="billing@acme.com"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -172,25 +202,33 @@ export default function CustomersListPage() {
                 </div>
                 <div>
                   <label className="block font-medium text-slate-700 mb-1">
-                    BBID
+                    External Billing ID
                   </label>
                   <input
                     value={form.bbid}
                     onChange={(e) => setForm({ ...form, bbid: e.target.value })}
+                    placeholder="CUST-001"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
                 <div>
                   <label className="block font-medium text-slate-700 mb-1">
-                    Source Deal ID
+                    Source Deal
                   </label>
-                  <input
+                  <select
                     value={form.sourceDealId}
                     onChange={(e) =>
                       setForm({ ...form, sourceDealId: e.target.value })
                     }
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
+                  >
+                    <option value="">None</option>
+                    {deals.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3">
@@ -198,18 +236,14 @@ export default function CustomersListPage() {
                   <label className="block font-medium text-slate-700 mb-1">
                     Subscription Plan
                   </label>
-                  <select
+                  <input
                     value={form.subscriptionPlan}
                     onChange={(e) =>
                       setForm({ ...form, subscriptionPlan: e.target.value })
                     }
+                    placeholder="Annual Plan"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  >
-                    <option>Enterprise Multi-Region</option>
-                    <option>Enterprise Annual</option>
-                    <option>Growth Pro Annual</option>
-                    <option>Starter Monthly</option>
-                  </select>
+                  />
                 </div>
                 <div>
                   <label className="block font-medium text-slate-700 mb-1">
@@ -252,6 +286,7 @@ export default function CustomersListPage() {
                     }
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
+                    <option value="">Unassigned</option>
                     {partners.map((p) => (
                       <option key={p.id} value={p.name}>
                         {p.name}

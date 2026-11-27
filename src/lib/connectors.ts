@@ -98,7 +98,7 @@ export function loadAndValidateConnectorConfig(
   }
   if (cfg.HUBSPOT_DRIVER === "live") {
     throw new Error(
-      "FAIL_CLOSED: HUBSPOT_DRIVER=live is not enabled without verified Eber HubSpot Private App (use HUBSPOT_DRIVER=mock)"
+      "FAIL_CLOSED: HUBSPOT_DRIVER=live is not enabled without a verified HubSpot Private App integration (use HUBSPOT_DRIVER=mock)"
     );
   }
   if (cfg.FX_DRIVER === "api") {
@@ -313,7 +313,7 @@ export const HUBSPOT_10_STAGE_MAPPING: Record<string, string> = {
 };
 
 export function syncDealToHubSpotConnector(
-  deal: { id: string; name: string; stage: string; amountSgd: number },
+  deal: { id: string; name: string; stage: string; amountBase: number },
   env: Record<string, string | undefined> = process.env
 ) {
   const cfg = loadAndValidateConnectorConfig(env);
@@ -328,7 +328,7 @@ export function syncDealToHubSpotConnector(
 
 // Payout Connector Interface (§4.2, §13.4 & §16.3 G1)
 export function executePayoutConnector(
-  payout: { payoutNumber: string; partnerName: string; amountSgd: number },
+  payout: { payoutNumber: string; partnerName: string; amountBase: number },
   env: Record<string, string | undefined> = process.env
 ) {
   const cfg = loadAndValidateConnectorConfig(env);

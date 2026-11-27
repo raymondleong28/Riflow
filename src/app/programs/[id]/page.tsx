@@ -5,9 +5,10 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { BackBreadcrumb, StatusBadge } from "@/components/SharedEngines";
+import { ProgramRuleModal } from "@/components/ProgramRuleModal";
 import {
-  EBER_COMMISSION_FIXTURE_RULES,
   StructuredRewardRule,
+  SUPPORTED_CURRENCIES,
   normalizeRewardRule,
 } from "@/lib/prmEngine";
 import {
@@ -21,7 +22,6 @@ import {
   Copy,
   ExternalLink,
   X,
-  Check,
 } from "lucide-react";
 
 const PROGRAM_TABS = [
@@ -35,24 +35,30 @@ const PROGRAM_TABS = [
 export default function ProgramDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const id = String(params?.id || "prog-strategic");
+  const id = String(params?.id || "");
   const {
     programs,
     partners,
     trackingLinks,
     manageItems,
+    settings,
+    loading,
     mutate,
     showToast,
     setGlobalModal,
   } = usePrm();
 
-  const program = programs.find((p) => p.id === id) || programs[0];
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
+
+  // §1.4 & §3.5.1: Never fall back to a hardcoded ID or programs[0]
+  const program = programs.find((p) => p.id === id);
+
   const [activeTab, setActiveTab] =
     useState<(typeof PROGRAM_TABS)[number]>("Levels");
   const [selectedLevelIdx, setSelectedLevelIdx] = useState(0);
   const [newLink, setNewLink] = useState({ name: "", targetUrl: "" });
 
-  // Structured Reward Rule Builder Modal State (Fixes D1, D2, D3)
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [deleteConfirmRuleId, setDeleteConfirmRuleId] = useState<string | null>(
@@ -60,12 +66,12 @@ export default function ProgramDetailPage() {
   );
   const [ruleForm, setRuleForm] = useState<StructuredRewardRule>({
     id: "",
-    title: "18% Recurring Deal Commission",
+    title: "",
     trigger: "transaction_paid",
     valueType: "Cash",
     amountMode: "percentage",
-    rateOrAmount: 18,
-    currency: "SGD",
+    rateOrAmount: 15,
+    currency: baseCurrency,
     duration: "recurring",
     startOffsetMonths: 1,
     durationMonths: 12,
@@ -74,13 +80,26 @@ export default function ProgramDetailPage() {
     clawbackOnRefund: true,
   });
 
-  // Reject Application with Required Reason Modal (§4.6)
   const [rejectPartnerId, setRejectPartnerId] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
-  const [reapplyAfterDate, setReapplyAfterDate] = useState("2027-03-01");
+  const [reapplyAfterDate, setReapplyAfterDate] = useState("");
+
+  if (loading) {
+    return <div className="p-8 text-sm text-slate-500">Loading program...</div>;
+  }
 
   if (!program) {
-    return <div className="p-8 text-sm text-slate-500">Loading program...</div>;
+    return (
+      <div className="max-w-xl mx-auto p-8 space-y-3">
+        <BackBreadcrumb href="/programs/views/all" label="Programs" />
+        <div className="p-6 bg-white rounded-xl border border-slate-200 text-sm text-slate-700">
+          <p className="font-bold text-slate-900">Program not found</p>
+          <p className="text-xs text-slate-500 mt-1">
+            No program exists with ID <code>{id || "(empty)"}</code>.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -110,12 +129,22 @@ export default function ProgramDetailPage() {
   const emailTemplates = manageItems.filter(
     (m) => m.category === "email_templates"
   );
+  const commissionTemplateItems = manageItems.filter(
+    (m) => m.category === "commission_templates"
+  );
+  const onboardingPipelines = manageItems.filter(
+    (m) => m.category === "onboarding_pipelines"
+  );
 
   const currentLevel = levels[selectedLevelIdx] || levels[0];
   const members = partners.filter(
     (p) => p.programId === program.id || p.programName === program.name
   );
-  const pendingApps = partners.filter((p) => p.status === "Pending");
+  const pendingApps = partners.filter(
+    (p) =>
+      p.status === "Pending" &&
+      (!p.programId || p.programId === program.id || p.programName === program.name)
+  );
   const progLinks = trackingLinks.filter((l) => l.programId === program.id);
 
   const openCreateRuleModal = () => {
@@ -127,7 +156,7 @@ export default function ProgramDetailPage() {
       valueType: "Cash",
       amountMode: "percentage",
       rateOrAmount: 15,
-      currency: "SGD",
+      currency: baseCurrency,
       duration: "recurring",
       startOffsetMonths: 1,
       durationMonths: 12,
@@ -140,7 +169,7 @@ export default function ProgramDetailPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const openEditRuleModal = (rawRule: any) => {
-    const norm = normalizeRewardRule(rawRule);
+    const norm = normalizeRewardRule(rawRule, baseCurrency);
     setEditingRuleId(norm.id);
     setRuleForm(norm);
     setRuleModalOpen(true);
@@ -151,7 +180,7 @@ export default function ProgramDetailPage() {
     if (!currentLevel) return;
     const existingRewards: StructuredRewardRule[] = (
       currentLevel.rewards || []
-    ).map(normalizeRewardRule);
+    ).map((r: unknown) => normalizeRewardRule(r, baseCurrency));
 
     const updatedRewards = editingRuleId
       ? existingRewards.map((r) => (r.id === editingRuleId ? ruleForm : r))
@@ -170,6 +199,34 @@ export default function ProgramDetailPage() {
     );
     setRuleModalOpen(false);
     setEditingRuleId(null);
+  };
+
+  const handleSaveAsTemplate = async (rule: StructuredRewardRule) => {
+    const tplTitle = rule.title.trim() || "Custom Commission Template";
+    await mutate(
+      "CREATE_MANAGE_ITEM",
+      {
+        category: "commission_templates",
+        name: tplTitle,
+        subtitle: `${rule.amountMode} · ${rule.duration}`,
+        status: "Active",
+        metadata: {
+          ...rule,
+          id: `tpl-${Date.now()}`,
+          title: tplTitle,
+          currency: rule.currency || baseCurrency,
+        },
+      },
+      `Saved "${tplTitle}" to editable commission templates!`
+    );
+  };
+
+  const handleDeleteTemplate = async (templateItemId: string) => {
+    await mutate(
+      "DELETE_MANAGE_ITEM",
+      { id: templateItemId },
+      "Removed commission template"
+    );
   };
 
   const handleConfirmDeleteRule = async () => {
@@ -197,14 +254,12 @@ export default function ProgramDetailPage() {
         name: `Tier Level ${levels.length + 1}`,
         badgeColor: "blue",
         rewards: [],
-        benefits: [
-          { id: `b-${Date.now()}`, title: "Priority Co-Selling Support" },
-        ],
+        benefits: [{ id: `b-${Date.now()}`, title: "Co-Selling Support" }],
         requirements: [
           {
             id: `req-${Date.now()}`,
             metric: "Minimum annual revenue",
-            target: "SGD 75,000",
+            target: `${baseCurrency} 50,000`,
           },
         ],
       },
@@ -235,7 +290,7 @@ export default function ProgramDetailPage() {
     await mutate(
       "UPDATE_PROGRAM",
       { id: program.id, data: { permissionsJson: JSON.stringify(nextPerms) } },
-      `Updated "${permLabel}" permission for ${roleKey} (enforced in Partner Portal)`
+      `Updated "${permLabel}" permission for ${roleKey}`
     );
   };
 
@@ -250,7 +305,7 @@ export default function ProgramDetailPage() {
     await mutate(
       "UPDATE_PROGRAM",
       { id: program.id, data: { autoEmailsJson: JSON.stringify(nextAuto) } },
-      `Assigned template "${templateName}" to ${triggerKey}`
+      `Updated ${triggerKey}`
     );
   };
 
@@ -271,7 +326,6 @@ export default function ProgramDetailPage() {
 
   return (
     <div className="max-w-[1440px] mx-auto px-6 py-5 space-y-5">
-      {/* Header */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1">
           <BackBreadcrumb href="/programs/views/all" label="Programs" />
@@ -307,7 +361,7 @@ export default function ProgramDetailPage() {
             <span>Duplicate</span>
           </button>
           <button
-            onClick={() => showToast("Program renamed")}
+            onClick={() => showToast("Program configuration saved")}
             className="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700"
           >
             Rename
@@ -316,7 +370,6 @@ export default function ProgramDetailPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Sidebar (4 cols) */}
         <div className="lg:col-span-4 space-y-4 text-xs">
           <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-2.5">
             <h3 className="font-bold text-sm text-slate-900 border-b border-slate-100 pb-2">
@@ -328,11 +381,18 @@ export default function ProgramDetailPage() {
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Owner</span>
-              <span className="font-medium text-slate-900">{program.owner}</span>
+              <span className="font-medium text-slate-900">
+                {program.owner || "—"}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Onboarding pipeline</span>
+              <span className="font-medium text-blue-700">
+                {program.onboardingPipelineId || "—"}
+              </span>
             </div>
           </div>
 
-          {/* D9 Fix: Per-Trigger Email Template Pickers */}
           <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
             <h3 className="font-bold text-sm text-slate-900 border-b border-slate-100 pb-2">
               Automated emails (Template per trigger)
@@ -341,17 +401,14 @@ export default function ProgramDetailPage() {
               {
                 key: "acknowledgeSignupTemplate",
                 label: "Acknowledge partner signup",
-                defaultTpl: "Partner Application Received",
               },
               {
                 key: "notifyAcceptedTemplate",
                 label: "Notify accepted partner (with activation link)",
-                defaultTpl: "Partner Application Approved",
               },
               {
                 key: "notifyRejectedTemplate",
                 label: "Notify rejected partner",
-                defaultTpl: "Partner Application Update",
               },
             ].map((trig) => (
               <div key={trig.key} className="space-y-1">
@@ -359,7 +416,7 @@ export default function ProgramDetailPage() {
                   {trig.label}
                 </label>
                 <select
-                  value={autoEmails[trig.key] || trig.defaultTpl}
+                  value={autoEmails[trig.key] || "Disabled"}
                   onChange={(e) =>
                     handleSelectEmailTemplate(trig.key, e.target.value)
                   }
@@ -371,9 +428,6 @@ export default function ProgramDetailPage() {
                       Template: {t.name}
                     </option>
                   ))}
-                  <option value="Partner Application Update">
-                    Template: Partner Application Update
-                  </option>
                 </select>
               </div>
             ))}
@@ -385,9 +439,13 @@ export default function ProgramDetailPage() {
             </h3>
             <p className="text-slate-600">
               Require partners to accept T&amp;Cs:{" "}
-              <strong className="text-blue-700">Yes</strong>
+              <strong className="text-blue-700">
+                {program.termsRequired ? "Yes" : "No"}
+              </strong>
             </p>
-            <p className="text-blue-600 truncate">{program.termsUrl}</p>
+            <p className="text-blue-600 truncate">
+              {program.termsUrl || "No terms URL configured"}
+            </p>
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-2">
@@ -395,11 +453,12 @@ export default function ProgramDetailPage() {
               Metrics
             </h3>
             <p className="text-slate-500">Revenue computation strategy:</p>
-            <p className="font-bold text-slate-900">{program.revenueStrategy}</p>
+            <p className="font-bold text-slate-900">
+              {program.revenueStrategy || "Closed won deals"}
+            </p>
           </div>
         </div>
 
-        {/* Right Tabs (8 cols) */}
         <div className="lg:col-span-8 space-y-4">
           <div className="bg-white rounded-xl border border-slate-200 p-2 shadow-sm flex flex-wrap gap-1">
             {PROGRAM_TABS.map((t) => (
@@ -433,31 +492,37 @@ export default function ProgramDetailPage() {
                   </button>
                 </div>
                 <div className="divide-y divide-slate-100">
-                  {members.map((m) => (
-                    <div
-                      key={m.id}
-                      className="py-3 flex items-center justify-between"
-                    >
-                      <div>
-                        <Link
-                          href={`/partners/${m.id}`}
-                          className="font-bold text-blue-700 hover:underline"
-                        >
-                          {m.name}
-                        </Link>
-                        <p className="text-slate-500">
-                          {m.qualifyingLevel} · Active since {m.activeSince} ·
-                          Sourced SGD {m.sourcedRevenue365d.toLocaleString()}
-                        </p>
+                  {members.length === 0 ? (
+                    <p className="py-6 text-center text-slate-400">
+                      No partners enrolled in this program yet.
+                    </p>
+                  ) : (
+                    members.map((m) => (
+                      <div
+                        key={m.id}
+                        className="py-3 flex items-center justify-between"
+                      >
+                        <div>
+                          <Link
+                            href={`/partners/${m.id}`}
+                            className="font-bold text-blue-700 hover:underline"
+                          >
+                            {m.name}
+                          </Link>
+                          <p className="text-slate-500">
+                            {m.qualifyingLevel || "Standard"} · Active since{" "}
+                            {m.activeSince || "—"} · Sourced {baseCurrency}{" "}
+                            {Number(m.sourcedRevenue365d || 0).toLocaleString()}
+                          </p>
+                        </div>
+                        <StatusBadge status={m.status} />
                       </div>
-                      <StatusBadge status={m.status} />
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </div>
             )}
 
-            {/* §4.6 Applications Review: Accept as Active, Accept as Prospect, Reject with Reason */}
             {activeTab === "Applications" && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
@@ -466,9 +531,8 @@ export default function ProgramDetailPage() {
                       Pending Applications ({pendingApps.length})
                     </h3>
                     <p className="text-slate-500">
-                      Accept as Prospect (Prospection pipeline, no portal access)
-                      or Active Partner (portal activation link sent), or Reject
-                      with required reason.
+                      Accept as Prospect or Active Partner, or Reject with
+                      required reason.
                     </p>
                   </div>
                   <Link
@@ -481,8 +545,7 @@ export default function ProgramDetailPage() {
 
                 {pendingApps.length === 0 ? (
                   <p className="text-slate-500 py-6 text-center">
-                    No pending applications. Submit one via the Public
-                    Application Form!
+                    No pending applications.
                   </p>
                 ) : (
                   pendingApps.map((app) => (
@@ -496,11 +559,8 @@ export default function ProgramDetailPage() {
                         </p>
                         <p className="text-slate-600">
                           Contact: {app.contactFirstName} {app.contactLastName} (
-                          {app.contactEmail}) · {app.country}
-                        </p>
-                        <p className="text-slate-400 text-[11px]">
-                          Industry: {app.industry} · Website:{" "}
-                          {app.companyWebsite}
+                          {app.contactEmail})
+                          {app.country ? ` · ${app.country}` : ""}
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -513,7 +573,7 @@ export default function ProgramDetailPage() {
                                 programId: program.id,
                                 mode: "accept_prospect",
                               },
-                              `Accepted "${app.name}" as Prospect (entered Prospection pipeline)`
+                              `Accepted "${app.name}" as Prospect`
                             )
                           }
                           className="px-3 py-1.5 rounded-lg border border-blue-600 text-blue-700 hover:bg-blue-50 font-semibold"
@@ -567,7 +627,7 @@ export default function ProgramDetailPage() {
                       onChange={(e) =>
                         setNewLink({ ...newLink, name: e.target.value })
                       }
-                      placeholder="e.g. APAC Webinar Referral Page"
+                      placeholder="Partner Referral Landing Page"
                       className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                     />
                   </div>
@@ -580,7 +640,7 @@ export default function ProgramDetailPage() {
                       onChange={(e) =>
                         setNewLink({ ...newLink, targetUrl: e.target.value })
                       }
-                      placeholder="https://r-prm.example.com/offer"
+                      placeholder="https://example.com/offer"
                       className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                     />
                   </div>
@@ -610,7 +670,9 @@ export default function ProgramDetailPage() {
                         <td className="py-2.5 font-bold text-slate-900">
                           {lnk.name}
                         </td>
-                        <td className="py-2.5 text-blue-600">{lnk.targetUrl}</td>
+                        <td className="py-2.5 text-blue-600">
+                          {lnk.targetUrl}
+                        </td>
                         <td className="py-2.5 text-right">
                           {lnk.uniqueVisitors}
                         </td>
@@ -622,7 +684,8 @@ export default function ProgramDetailPage() {
                           {lnk.transactionsCount}
                         </td>
                         <td className="py-2.5 text-right font-bold">
-                          SGD {lnk.revenuesSgd.toLocaleString()}
+                          {baseCurrency}{" "}
+                          {Number(lnk.revenuesBase || 0).toLocaleString()}
                         </td>
                       </tr>
                     ))}
@@ -631,7 +694,6 @@ export default function ProgramDetailPage() {
               </div>
             )}
 
-            {/* D1, D2, D3 Fix: Structured Reward Rule Builder + Edit & Delete with Confirmation */}
             {activeTab === "Levels" && (
               <div className="space-y-5">
                 <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3">
@@ -681,7 +743,7 @@ export default function ProgramDetailPage() {
                         {(currentLevel.rewards || []).map(
                           // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           (rawR: any) => {
-                            const r = normalizeRewardRule(rawR);
+                            const r = normalizeRewardRule(rawR, baseCurrency);
                             return (
                               <div
                                 key={r.id}
@@ -698,8 +760,8 @@ export default function ProgramDetailPage() {
                                   </div>
                                   <p className="text-slate-600">
                                     Trigger: <strong>{r.trigger}</strong> ·
-                                    Duration: <strong>{r.duration}</strong> (Start
-                                    Month {r.startOffsetMonths ?? 1}
+                                    Duration: <strong>{r.duration}</strong>{" "}
+                                    (Start Month {r.startOffsetMonths ?? 1}
                                     {r.duration === "recurring"
                                       ? ` for ${r.durationMonths || 12} mos`
                                       : ""}
@@ -729,9 +791,10 @@ export default function ProgramDetailPage() {
                                   <span className="px-2.5 py-1 rounded bg-blue-600 text-white font-bold">
                                     {r.amountMode === "percentage"
                                       ? `${r.rateOrAmount}%`
-                                      : r.amountMode === "one_month_subscription"
+                                      : r.amountMode ===
+                                        "one_month_subscription"
                                       ? "1 Month Fee"
-                                      : `${r.currency || "SGD"} ${
+                                      : `${r.currency || baseCurrency} ${
                                           r.rateOrAmount
                                         }`}
                                   </span>
@@ -757,7 +820,6 @@ export default function ProgramDetailPage() {
                       </div>
                     </div>
 
-                    {/* Benefits */}
                     <div className="space-y-2">
                       <div className="flex items-center space-x-2 font-bold text-sm text-slate-900">
                         <Award className="w-4 h-4 text-blue-600" />
@@ -778,7 +840,6 @@ export default function ProgramDetailPage() {
                       </div>
                     </div>
 
-                    {/* Requirements */}
                     <div className="space-y-2">
                       <div className="flex items-center space-x-2 font-bold text-sm text-slate-900">
                         <CheckCircle2 className="w-4 h-4 text-blue-600" />
@@ -808,18 +869,58 @@ export default function ProgramDetailPage() {
               </div>
             )}
 
-            {/* §4.3 Role-Based Partner Portal Permissions (Persisted & Enforced in /p) */}
             {activeTab === "Settings" && (
               <div className="space-y-5">
-                {/* §14.2 Slice 4: Per-Program Payout Schedule & Threshold Override */}
                 <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-3">
                   <h4 className="font-bold text-slate-900 text-sm">
-                    Program Payout Schedule &amp; Threshold Override
+                    Program Onboarding Pipeline &amp; Payout Schedule
                   </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
-                        Payout Cadence (Default / Override)
+                        Assigned Onboarding Pipeline
+                      </label>
+                      {onboardingPipelines.length > 0 ? (
+                        <select
+                          value={program.onboardingPipelineId || ""}
+                          onChange={(e) =>
+                            mutate(
+                              "UPDATE_PROGRAM",
+                              {
+                                id: program.id,
+                                data: { onboardingPipelineId: e.target.value },
+                              },
+                              `Assigned onboarding pipeline "${e.target.value}"`
+                            )
+                          }
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                        >
+                          {onboardingPipelines.map((pl) => (
+                            <option key={pl.id} value={pl.name}>
+                              {pl.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          defaultValue={program.onboardingPipelineId || ""}
+                          onBlur={(e) =>
+                            mutate(
+                              "UPDATE_PROGRAM",
+                              {
+                                id: program.id,
+                                data: { onboardingPipelineId: e.target.value },
+                              },
+                              "Updated onboarding pipeline"
+                            )
+                          }
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                        />
+                      )}
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Payout Cadence
                       </label>
                       <select
                         value={String(autoEmails.payoutCadence || "quarterly")}
@@ -831,24 +932,22 @@ export default function ProgramDetailPage() {
                         }
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
                       >
-                        <option value="quarterly">
-                          Quarterly (1 payout per partner per quarter)
-                        </option>
-                        <option value="monthly">
-                          Monthly (1 payout per partner per month)
-                        </option>
+                        <option value="quarterly">Quarterly</option>
+                        <option value="monthly">Monthly</option>
                       </select>
                     </div>
                     <div>
                       <label className="block font-semibold text-slate-700 mb-1">
-                        Minimum Payout Threshold (SGD)
+                        Minimum Payout Threshold ({baseCurrency})
                       </label>
                       <input
                         type="number"
-                        defaultValue={Number(autoEmails.payoutThresholdSgd ?? 250)}
+                        defaultValue={Number(
+                          autoEmails.payoutThresholdBase ?? 250
+                        )}
                         onBlur={(e) =>
                           handleSelectEmailTemplate(
-                            "payoutThresholdSgd",
+                            "payoutThresholdBase",
                             e.target.value
                           )
                         }
@@ -861,14 +960,15 @@ export default function ProgramDetailPage() {
                 <div className="flex items-center space-x-2 font-bold text-sm text-slate-900">
                   <Shield className="w-4 h-4 text-blue-600" />
                   <span>
-                    Role-Based Partner Portal Permissions (Enforced Live in /p
-                    Partner Portal)
+                    Role-Based Partner Portal Permissions (Enforced Live in /p)
                   </span>
                 </div>
 
                 {Object.entries(permissions).map(([groupName, rules]) => (
                   <div key={groupName} className="space-y-2">
-                    <h4 className="font-bold text-blue-700 uppercase tracking-wider text-[11px]">{groupName}</h4>
+                    <h4 className="font-bold text-blue-700 uppercase tracking-wider text-[11px]">
+                      {groupName}
+                    </h4>
                     <div className="border border-slate-200 rounded-xl overflow-hidden">
                       <table className="w-full text-left border-collapse">
                         <thead>
@@ -876,16 +976,33 @@ export default function ProgramDetailPage() {
                             <th className="py-2 px-3">Permission</th>
                             <th className="py-2 px-3 text-center">Manager</th>
                             <th className="py-2 px-3 text-center">Sales Rep</th>
-                            <th className="py-2 px-3 text-center">Stakeholder</th>
+                            <th className="py-2 px-3 text-center">
+                              Stakeholder
+                            </th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {Object.entries(rules).map(([permLabel, roles]) => (
                             <tr key={permLabel}>
-                              <td className="py-2 px-3 font-medium text-slate-800">{permLabel}</td>
-                              {(["Manager", "SalesRep", "Stakeholder"] as const).map((rKey) => (
+                              <td className="py-2 px-3 font-medium text-slate-800">
+                                {permLabel}
+                              </td>
+                              {(
+                                ["Manager", "SalesRep", "Stakeholder"] as const
+                              ).map((rKey) => (
                                 <td key={rKey} className="py-2 px-3 text-center">
-                                  <input type="checkbox" checked={Boolean(roles[rKey])} onChange={() => handleTogglePermission(groupName, permLabel, rKey)} className="rounded text-blue-600 cursor-pointer" />
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(roles[rKey])}
+                                    onChange={() =>
+                                      handleTogglePermission(
+                                        groupName,
+                                        permLabel,
+                                        rKey
+                                      )
+                                    }
+                                    className="rounded text-blue-600 cursor-pointer"
+                                  />
                                 </td>
                               ))}
                             </tr>
@@ -901,456 +1018,116 @@ export default function ProgramDetailPage() {
         </div>
       </div>
 
-      {/* STRUCTURED REWARD RULE BUILDER MODAL (Fixes D1, D2, D3) */}
-      {ruleModalOpen && (
+      <ProgramRuleModal
+        open={ruleModalOpen}
+        editingRuleId={editingRuleId}
+        ruleForm={ruleForm}
+        setRuleForm={setRuleForm}
+        baseCurrency={baseCurrency}
+        commissionTemplateItems={commissionTemplateItems}
+        onClose={() => setRuleModalOpen(false)}
+        onSaveRule={handleSaveRule}
+        onSaveAsTemplate={handleSaveAsTemplate}
+        onDeleteTemplate={handleDeleteTemplate}
+      />
+
+      {deleteConfirmRuleId && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
-          <form
-            onSubmit={handleSaveRule}
-            className="bg-white rounded-xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden text-xs"
-          >
-            <div className="px-5 py-4 bg-blue-600 text-white flex items-center justify-between">
-              <h3 className="font-bold text-sm">
-                {editingRuleId
-                  ? "Edit Structured Commission Rule"
-                  : "Create Structured Commission Rule"}
-              </h3>
-              <button type="button" onClick={() => setRuleModalOpen(false)}>
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-3.5 max-h-[80vh] overflow-y-auto">
-              {/* Quick Preset Loader for Eber's 3 Real Commission Programs (§4.1.4) */}
-              <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 space-y-1.5">
-                <span className="text-[11px] font-bold text-blue-800">
-                  Load Eber Commission Fixture Template:
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setRuleForm({
-                        ...EBER_COMMISSION_FIXTURE_RULES.biz_partner_one_off,
-                        id: ruleForm.id,
-                      })
-                    }
-                    className="px-2.5 py-1 rounded bg-white border border-blue-300 text-blue-700 font-semibold hover:bg-blue-100"
-                  >
-                    Biz Partner (Month-4 One-Off)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setRuleForm({
-                        ...EBER_COMMISSION_FIXTURE_RULES.biz_partner_premium_recurring,
-                        id: ruleForm.id,
-                      })
-                    }
-                    className="px-2.5 py-1 rounded bg-white border border-blue-300 text-blue-700 font-semibold hover:bg-blue-100"
-                  >
-                    Biz Partner Premium (20% M4–15 / 10% M16–27)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setRuleForm({
-                        ...EBER_COMMISSION_FIXTURE_RULES.referral_entry,
-                        id: ruleForm.id,
-                      })
-                    }
-                    className="px-2.5 py-1 rounded bg-white border border-blue-300 text-blue-700 font-semibold hover:bg-blue-100"
-                  >
-                    Referral Entry (Pre-Acceptance Override)
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Rule Title *
-                </label>
-                <input
-                  required
-                  value={ruleForm.title}
-                  onChange={(e) =>
-                    setRuleForm({ ...ruleForm, title: e.target.value })
-                  }
-                  placeholder="e.g. 18% Recurring Enterprise Commission"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Trigger Event
-                  </label>
-                  <select
-                    value={ruleForm.trigger}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        trigger: e.target
-                          .value as StructuredRewardRule["trigger"],
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  >
-                    <option value="transaction_paid">
-                      On paid transaction from won deal
-                    </option>
-                    <option value="deal_closed_won">
-                      When deal moves to Closed Won
-                    </option>
-                    <option value="lead_accepted">
-                      When partner lead is accepted
-                    </option>
-                    <option value="lead_converted">
-                      When lead converts to deal
-                    </option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Value Type
-                  </label>
-                  <select
-                    value={ruleForm.valueType}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        valueType: e.target
-                          .value as StructuredRewardRule["valueType"],
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="Coupon">Coupon (Config OPEN)</option>
-                    <option value="Gift card">Gift card (Config OPEN)</option>
-                    <option value="Credit">Credit (Config OPEN)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Amount Mode
-                  </label>
-                  <select
-                    value={ruleForm.amountMode}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        amountMode: e.target
-                          .value as StructuredRewardRule["amountMode"],
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  >
-                    <option value="percentage">Percentage (%)</option>
-                    <option value="fixed">Fixed Amount</option>
-                    <option value="one_month_subscription">
-                      1 Month Subscription Fee
-                    </option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Rate (%) or Fixed Amount
-                  </label>
-                  <input
-                    type="number"
-                    value={ruleForm.rateOrAmount}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        rateOrAmount: Number(e.target.value),
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Currency
-                  </label>
-                  <select
-                    value={ruleForm.currency || "SGD"}
-                    onChange={(e) =>
-                      setRuleForm({ ...ruleForm, currency: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  >
-                    <option>SGD</option>
-                    <option>USD</option>
-                    <option>EUR</option>
-                    <option>MYR</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Duration Mode
-                  </label>
-                  <select
-                    value={ruleForm.duration}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        duration: e.target
-                          .value as StructuredRewardRule["duration"],
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  >
-                    <option value="one_off">One-off</option>
-                    <option value="recurring">Recurring (N months)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Start at Billing Month
-                  </label>
-                  <input
-                    type="number"
-                    value={ruleForm.startOffsetMonths ?? 1}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        startOffsetMonths: Number(e.target.value) || 1,
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Duration (Months)
-                  </label>
-                  <input
-                    type="number"
-                    value={ruleForm.durationMonths ?? 12}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        durationMonths: Number(e.target.value) || 1,
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              {/* P5: Visible & Editable Rate Steps in Rule Builder */}
-              {ruleForm.duration === "recurring" && (
-                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-800">
-                      Recurring Rate Steps (e.g. 20% M4–15, 10% M16–27)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setRuleForm({
-                          ...ruleForm,
-                          rateSteps: [
-                            ...(ruleForm.rateSteps || []),
-                            { fromMonth: 4, toMonth: 15, ratePct: 20 },
-                          ],
-                        })
-                      }
-                      className="px-2.5 py-1 rounded bg-blue-600 text-white font-semibold text-[11px]"
-                    >
-                      + Add Rate Step
-                    </button>
-                  </div>
-                  {(ruleForm.rateSteps || []).length === 0 ? (
-                    <p className="text-[11px] text-slate-500">
-                      No rate steps defined (uses flat rate above for all recurring months). Click &ldquo;+ Add Rate Step&rdquo; to configure stepped rates.
-                    </p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {(ruleForm.rateSteps || []).map((step, sIdx) => (
-                        <div
-                          key={sIdx}
-                          className="grid grid-cols-4 gap-2 items-center bg-white p-2 rounded-lg border border-slate-200"
-                        >
-                          <div>
-                            <label className="block text-[10px] text-slate-500">
-                              From Month
-                            </label>
-                            <input
-                              type="number"
-                              value={step.fromMonth}
-                              onChange={(e) => {
-                                const next = [...(ruleForm.rateSteps || [])];
-                                next[sIdx] = {
-                                  ...next[sIdx],
-                                  fromMonth: Number(e.target.value) || 1,
-                                };
-                                setRuleForm({ ...ruleForm, rateSteps: next });
-                              }}
-                              className="w-full px-2 py-1 border border-slate-300 rounded"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] text-slate-500">
-                              To Month
-                            </label>
-                            <input
-                              type="number"
-                              value={step.toMonth}
-                              onChange={(e) => {
-                                const next = [...(ruleForm.rateSteps || [])];
-                                next[sIdx] = {
-                                  ...next[sIdx],
-                                  toMonth: Number(e.target.value) || 1,
-                                };
-                                setRuleForm({ ...ruleForm, rateSteps: next });
-                              }}
-                              className="w-full px-2 py-1 border border-slate-300 rounded"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] text-slate-500">
-                              Rate (%)
-                            </label>
-                            <input
-                              type="number"
-                              value={step.ratePct}
-                              onChange={(e) => {
-                                const next = [...(ruleForm.rateSteps || [])];
-                                next[sIdx] = {
-                                  ...next[sIdx],
-                                  ratePct: Number(e.target.value) || 0,
-                                };
-                                setRuleForm({ ...ruleForm, rateSteps: next });
-                              }}
-                              className="w-full px-2 py-1 border border-slate-300 rounded"
-                            />
-                          </div>
-                          <div className="text-right pt-3">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const next = (ruleForm.rateSteps || []).filter(
-                                  (_, i) => i !== sIdx
-                                );
-                                setRuleForm({ ...ruleForm, rateSteps: next });
-                              }}
-                              className="px-2 py-1 rounded text-red-600 hover:bg-red-50 font-semibold"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="flex flex-wrap gap-4 pt-1">
-                <label className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    checked={ruleForm.requiresValidation}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        requiresValidation: e.target.checked,
-                      })
-                    }
-                  />
-                  <span className="font-medium text-slate-800">
-                    Create as Pending until Admin validates
-                  </span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    checked={ruleForm.clawbackOnRefund}
-                    onChange={(e) =>
-                      setRuleForm({
-                        ...ruleForm,
-                        clawbackOnRefund: e.target.checked,
-                      })
-                    }
-                  />
-                  <span className="font-medium text-slate-800">
-                    Clawback (reverse) if underlying payment is refunded
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
+          <div className="bg-white rounded-xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4 text-xs">
+            <h3 className="font-bold text-base text-slate-900">
+              Delete Commission Rule?
+            </h3>
+            <p className="text-slate-600">
+              Are you sure you want to remove this commission rule from{" "}
+              <strong>{currentLevel?.name}</strong>?
+            </p>
+            <div className="flex justify-end space-x-2">
               <button
-                type="button"
-                onClick={() => setRuleModalOpen(false)}
-                className="px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-200"
+                onClick={() => setDeleteConfirmRuleId(null)}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700"
               >
                 Cancel
               </button>
               <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-blue-600 text-white font-semibold flex items-center space-x-1"
+                onClick={handleConfirmDeleteRule}
+                className="px-4 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold"
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>{editingRuleId ? "Save Rule" : "Confirm & Add Rule"}</span>
+                Confirm Delete
               </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* DELETE RULE CONFIRMATION MODAL (Fixes D3) */}
-      {deleteConfirmRuleId && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4 text-xs">
-            <h3 className="font-bold text-base text-slate-900">Delete Commission Rule?</h3>
-            <p className="text-slate-600">Are you sure you want to remove this commission rule from <strong>{currentLevel?.name}</strong>? Existing historical rewards will not be deleted.</p>
-            <div className="flex justify-end space-x-2">
-              <button onClick={() => setDeleteConfirmRuleId(null)} className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700">Cancel</button>
-              <button onClick={handleConfirmDeleteRule} className="px-4 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold">Confirm Delete</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* REJECT APPLICATION WITH REQUIRED REASON MODAL (§4.6) */}
       {rejectPartnerId && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
           <form
             onSubmit={async (e) => {
               e.preventDefault();
               if (!rejectionReason.trim()) return;
-              await mutate("REVIEW_PARTNER_APPLICATION", { partnerId: rejectPartnerId, programId: program.id, mode: "reject", rejectionReason, reapplyAfterDate }, "Partner application rejected with reason & notification email sent");
+              await mutate(
+                "REVIEW_PARTNER_APPLICATION",
+                {
+                  partnerId: rejectPartnerId,
+                  programId: program.id,
+                  mode: "reject",
+                  rejectionReason,
+                  reapplyAfterDate,
+                },
+                "Partner application rejected with reason"
+              );
               setRejectPartnerId(null);
             }}
             className="bg-white rounded-xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden text-xs"
           >
             <div className="px-5 py-4 bg-amber-600 text-white flex items-center justify-between">
-              <h3 className="font-bold text-sm">Reject Partner Application (Reason Required)</h3>
-              <button type="button" onClick={() => setRejectPartnerId(null)}><X className="w-4 h-4" /></button>
+              <h3 className="font-bold text-sm">
+                Reject Partner Application (Reason Required)
+              </h3>
+              <button type="button" onClick={() => setRejectPartnerId(null)}>
+                <X className="w-4 h-4" />
+              </button>
             </div>
             <div className="p-5 space-y-3">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Rejection Reason (sent in rejection email) *</label>
-                <textarea required rows={3} value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} placeholder="e.g. Minimum regional technical headcount requirement not yet met." className="w-full px-3 py-2 border border-slate-300 rounded-lg" />
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Rejection Reason (sent in rejection email) *
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  placeholder="State the reason for declining this application..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                />
               </div>
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Eligible to re-apply after (optional)</label>
-                <input type="date" value={reapplyAfterDate} onChange={(e) => setReapplyAfterDate(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg" />
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Eligible to re-apply after (optional)
+                </label>
+                <input
+                  type="date"
+                  value={reapplyAfterDate}
+                  onChange={(e) => setReapplyAfterDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                />
               </div>
             </div>
             <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
-              <button type="button" onClick={() => setRejectPartnerId(null)} className="px-3 py-1.5 rounded-lg text-slate-600">Cancel</button>
-              <button type="submit" className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold">Confirm Rejection</button>
+              <button
+                type="button"
+                onClick={() => setRejectPartnerId(null)}
+                className="px-3 py-1.5 rounded-lg text-slate-600"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+              >
+                Confirm Rejection
+              </button>
             </div>
           </form>
         </div>

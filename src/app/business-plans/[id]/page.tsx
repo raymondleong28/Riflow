@@ -4,11 +4,15 @@ import React from "react";
 import { useParams } from "next/navigation";
 import { usePrm } from "@/context/PrmContext";
 import { BackBreadcrumb, StatusBadge } from "@/components/SharedEngines";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 
 export default function BusinessPlanDetailPage() {
   const params = useParams();
   const id = String(params?.id || "");
-  const { businessPlans } = usePrm();
+  const { businessPlans, settings } = usePrm();
+
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
 
   const plan = businessPlans.find((bp) => bp.id === id);
   if (!plan) {
@@ -50,19 +54,23 @@ export default function BusinessPlanDetailPage() {
           <span className="text-slate-500">Partner</span>
           <span className="font-bold text-blue-700">{plan.partnerName}</span>
           <span className="text-slate-500">Partner Owner</span>
-          <span className="font-semibold">{plan.partnerOwner}</span>
+          <span className="font-semibold">{plan.partnerOwner || "—"}</span>
           <span className="text-slate-500">Period</span>
           <span>
-            {plan.startDate} → {plan.endDate}
+            {plan.startDate || "—"} → {plan.endDate || "—"}
           </span>
-          <span className="text-slate-500">Target Revenue</span>
+          <span className="text-slate-500">
+            Target Revenue ({baseCurrency})
+          </span>
           <span className="font-bold">
-            SGD {(plan.targetRevSgd || 100000).toLocaleString()}
+            {baseCurrency} {(plan.targetRevBase || 0).toLocaleString()}
           </span>
         </div>
-        <p className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-700">
-          {plan.description}
-        </p>
+        {plan.description && (
+          <p className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-700">
+            {plan.description}
+          </p>
+        )}
       </div>
     </div>
   );

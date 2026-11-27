@@ -25,6 +25,7 @@ export interface RprmSession {
   partnerId?: string | null;
   partnerName?: string | null;
   impersonatingPartnerId?: string | null;
+  mfaEnrolled?: boolean;
   mfaVerified?: boolean;
   issuedAt: number;
   expiresAt: number;
@@ -190,6 +191,7 @@ export async function getActiveServerSession(
     partnerId: effectivePartnerId,
     partnerName: effectivePartnerName,
     impersonatingPartnerId: row.impersonatingPartnerId,
+    mfaEnrolled: Boolean(row.user.mfaSecret),
     mfaVerified: true,
     issuedAt: row.createdAt.getTime(),
     expiresAt: row.expiresAt.getTime(),

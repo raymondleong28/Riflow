@@ -7,7 +7,7 @@ import { EntityListToolbar, StatusBadge } from "@/components/SharedEngines";
 import { X } from "lucide-react";
 
 export default function AccountsMappingListPage() {
-  const { accounts, partners, mutate } = usePrm();
+  const { accounts, partners, session, mutate } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -15,10 +15,21 @@ export default function AccountsMappingListPage() {
   const [form, setForm] = useState({
     accountName: "",
     type: "Prospect",
-    ownerName: "Alex Morgan",
-    partnerName: "Apex Cloud Solutions Pte Ltd",
+    ownerName: "",
+    partnerName: "",
     partnerAccountType: "Customer",
   });
+
+  const openModal = () => {
+    setForm({
+      accountName: "",
+      type: "Prospect",
+      ownerName: session?.name || "",
+      partnerName: partners[0]?.name || "",
+      partnerAccountType: "Customer",
+    });
+    setModalOpen(true);
+  };
 
   const filtered = accounts.filter((a) => {
     if (activeView === "All Overlaps" && !a.hasOverlap) return false;
@@ -51,7 +62,6 @@ export default function AccountsMappingListPage() {
       `Mapped account "${form.accountName}" added!`
     );
     setModalOpen(false);
-    setForm({ ...form, accountName: "" });
   };
 
   return (
@@ -69,8 +79,8 @@ export default function AccountsMappingListPage() {
         onSelectView={setActiveView}
         search={search}
         onSearchChange={setSearch}
-        primaryActionLabel="Add data source"
-        onPrimaryAction={() => setModalOpen(true)}
+        primaryActionLabel="Add mapped account"
+        onPrimaryAction={openModal}
         extraRightControls={
           <Link
             href="/data-sources"
@@ -114,20 +124,28 @@ export default function AccountsMappingListPage() {
                   <td className="py-3 px-3">
                     <StatusBadge status={a.type} />
                   </td>
-                  <td className="py-3 px-3 text-slate-700">{a.ownerName}</td>
-                  <td className="py-3 px-3 text-blue-600">{a.ownerEmail}</td>
+                  <td className="py-3 px-3 text-slate-700">
+                    {a.ownerName || "—"}
+                  </td>
+                  <td className="py-3 px-3 text-blue-600">
+                    {a.ownerEmail || "—"}
+                  </td>
                   <td className="py-3 px-3 text-slate-600">{a.source}</td>
                   <td className="py-3 px-3 text-slate-500">{a.importedDate}</td>
                   <td className="py-3 px-3 text-center font-bold text-blue-700">
-                    {a.partnerAccountType === "Customer" ? a.partnerName : "—"}
+                    {a.partnerAccountType === "Customer"
+                      ? a.partnerName || "—"
+                      : "—"}
                   </td>
                   <td className="py-3 px-3 text-center font-bold text-blue-700">
                     {a.partnerAccountType === "Opportunity"
-                      ? a.partnerName
+                      ? a.partnerName || "—"
                       : "—"}
                   </td>
                   <td className="py-3 px-4 text-center font-bold text-blue-700">
-                    {a.partnerAccountType === "Prospect" ? a.partnerName : "—"}
+                    {a.partnerAccountType === "Prospect"
+                      ? a.partnerName || "—"
+                      : "—"}
                   </td>
                 </tr>
               ))}
@@ -159,7 +177,7 @@ export default function AccountsMappingListPage() {
                   onChange={(e) =>
                     setForm({ ...form, accountName: e.target.value })
                   }
-                  placeholder="e.g. Raffles Luxury Retail Group"
+                  placeholder="Acme Ltd"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -206,6 +224,7 @@ export default function AccountsMappingListPage() {
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
+                  <option value="">None</option>
                   {partners.map((p) => (
                     <option key={p.id} value={p.name}>
                       {p.name}

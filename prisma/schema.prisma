@@ -2,7 +2,6 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Uses local PostgreSQL 16 (same relational engine as production — §3 Slice 0b, §13.3, §14.2 Slice 3, §15.2 Slice 1).
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -11,8 +10,9 @@ datasource db {
 model Program {
   id                   String    @id @default(cuid())
   name                 String
-  owner                String    @default("Alex Morgan")
-  onboardingPipelineId String    @default("Strategic Partner")
+  ownerId              String?
+  owner                String    @default("")
+  onboardingPipelineId String    @default("")
   levelsJson           String    // JSON array of levels with rewards, benefits, requirements
   partnerCount         Int       @default(0)
   pendingApplications  Int       @default(0)
@@ -22,8 +22,8 @@ model Program {
   influencedRev365d    Int       @default(0)
   autoEmailsJson       String    // signup, accepted, rejected email config
   termsRequired        Boolean   @default(true)
-  termsUrl             String    @default("https://r-prm.example.com/terms")
-  revenueStrategy      String    @default("Sum of deals closed won")
+  termsUrl             String    @default("")
+  revenueStrategy      String?
   permissionsJson      String    // Role permissions matrix (Manager, Sales Rep, Stakeholder)
   createdAt            DateTime  @default(now())
   partners             Partner[]
@@ -32,39 +32,40 @@ model Program {
 model Partner {
   id                   String   @id @default(cuid())
   name                 String
-  owner                String   @default("Alex Morgan")
-  groupName            String   @default("APAC Cloud Alliances")
+  ownerId              String?
+  owner                String   @default("")
+  groupName            String   @default("")
   programId            String?
   program              Program? @relation(fields: [programId], references: [id])
-  programName          String   @default("R-Cloud Strategic Partner")
-  qualifyingLevel      String   @default("Gold Tier")
+  programName          String   @default("")
+  qualifyingLevel      String   @default("")
   status               String   @default("Active") // Active, Pending, Onboarding, Inactive
-  onboardingStatus     String   @default("Completed") // Not started, In progress, Completed
-  onboardingPipeline   String   @default("Strategic Partner")
-  onboardingStage      String   @default("Completed")
-  prospectionStage     String   @default("Active") // New, Onboarding, Active
+  onboardingStatus     String   @default("Not started") // Not started, In progress, Completed
+  onboardingPipeline   String   @default("")
+  onboardingStage      String   @default("")
+  prospectionStage     String   @default("New") // New, Onboarding, Active
   partnerType          String   @default("Reseller")
-  country              String   @default("Singapore")
+  country              String   @default("")
   language             String   @default("English")
-  currency             String   @default("SGD")
-  activeSince          String   @default("2026-01-15")
-  lastSeenDate         String   @default("2026-11-23")
-  lastSubmittedLead    String   @default("2026-11-18")
+  currency             String
+  activeSince          String   @default("")
+  lastSeenDate         String   @default("")
+  lastSubmittedLead    String   @default("")
   submittedLeads365d   Int      @default(0)
   registeredDeals365d  Int      @default(0)
   pendingRewardsAll    Int      @default(0)
   sourcedRevenue365d   Int      @default(0)
   influencedRev365d    Int      @default(0)
-  contactFirstName     String   @default("Jordan")
-  contactLastName      String   @default("Lee")
-  contactEmail         String   @default("jordan@partner.example.com")
-  contactJobTitle      String   @default("Head of Alliances")
-  contactPhone         String   @default("+65 6789 1234")
+  contactFirstName     String   @default("")
+  contactLastName      String   @default("")
+  contactEmail         String   @default("")
+  contactJobTitle      String   @default("")
+  contactPhone         String   @default("")
   portalAccess         Boolean  @default(true)
-  companyWebsite       String   @default("https://partner.example.com")
-  companyAddress       String   @default("1 Raffles Place, Singapore")
-  employeeCount        String   @default("50-200")
-  industry             String   @default("Cloud & SaaS Consulting")
+  companyWebsite       String   @default("")
+  companyAddress       String   @default("")
+  employeeCount        String   @default("")
+  industry             String   @default("")
   bankDetailsJson      String   @default("{}")
   leadFormTokenHash    String?  @unique
   leadFormTokenCipher  String   @default("")
@@ -80,7 +81,7 @@ model PartnerTeamMember {
   partnerName String
   role        String   @default("Manager") // Manager, Sales Rep, Stakeholder
   status      String   @default("Active")  // Active, Pending, Sent, Expired
-  invitedAt   String   @default("2026-09-10")
+  invitedAt   String   @default("")
   createdAt   DateTime @default(now())
 }
 
@@ -89,59 +90,61 @@ model Lead {
   firstName         String
   lastName          String
   company           String
-  jobTitle          String   @default("VP of Operations")
+  jobTitle          String   @default("")
   email             String
-  phone             String   @default("+65 9123 4567")
-  country           String   @default("Singapore")
+  phone             String   @default("")
+  country           String   @default("")
   retailBrand       String   @default("")
-  outletsCount      Int      @default(3)
-  website           String   @default("https://client.example.com")
-  posSolution       String   @default("CloudPOS Pro")
-  remarks           String   @default("Looking for multi-region loyalty & CRM rollout")
-  status            String   @default("Accepted") // Pending, Accepted, Refused, Converted
-  owner             String   @default("Alex Morgan")
+  outletsCount      Int      @default(0)
+  website           String   @default("")
+  posSolution       String   @default("")
+  remarks           String   @default("")
+  status            String   @default("Pending") // Pending, Accepted, Refused, Converted
+  ownerId           String?
+  owner             String   @default("")
   source            String   @default("Partner Portal") // Partner Portal, Shared, Inbound Link
   sourcePartnerId   String?
-  sourcePartnerName String   @default("Apex Cloud Solutions")
-  assignedPartner   String   @default("Apex Cloud Solutions")
-  assignedContact   String   @default("Jordan Lee")
-  assignedDate      String   @default("2026-10-12")
-  acceptedBy        String   @default("Alex Morgan")
-  acceptedDate      String   @default("2026-10-13")
-  deadline          String   @default("2026-12-15")
+  sourcePartnerName String   @default("")
+  assignedPartner   String   @default("")
+  assignedContact   String   @default("")
+  assignedDate      String   @default("")
+  acceptedBy        String   @default("")
+  acceptedDate      String   @default("")
+  deadline          String   @default("")
   convertedDealId   String?
-  hubspotSyncedAt   String   @default("2026-11-23 14:20")
+  hubspotSyncedAt   String   @default("")
   createdAt         DateTime @default(now())
 }
 
 model Deal {
   id                  String   @id @default(cuid())
   name                String
-  owner               String   @default("Alex Morgan")
+  ownerId             String?
+  owner               String   @default("")
   clientName          String
   company             String
   amount              Int
-  currency            String   @default("SGD")
-  amountSgd           Int
+  currency            String
+  amountBase          Int
   partnerName         String
   partnerId           String?
-  assignedContact     String   @default("Jordan Lee")
-  status              String   @default("Accepted") // Pending, Accepted, Refused
+  assignedContact     String   @default("")
+  status              String   @default("Pending") // Pending, Accepted, Refused
   stage               String   @default("Discovery Stage")
   // 10 Stages: To Work On, Appointment Scheduled, Holding, Discovery Stage, Presentation Stage, Quotation Stage, Negotiation Stage, Closing Stage, Closed Won, Closed Lost
-  stageEnteredAt      String   @default("2026-11-01")
+  stageEnteredAt      String   @default("")
   source              String   @default("Partner Registration")
   sourcePartnerName   String
-  closeDate           String   @default("2026-12-20")
-  expirationDate      String   @default("2027-02-20")
-  programName         String   @default("R-Cloud Strategic Partner")
+  closeDate           String   @default("")
+  expirationDate      String   @default("")
+  programName         String   @default("")
   dealType            String   @default("New Business")
-  subscriptionPlan    String   @default("Enterprise Annual")
-  comment             String   @default("High-priority enterprise rollout")
+  subscriptionPlan    String   @default("")
+  comment             String   @default("")
   sourceLeadId        String?
-  hubspotDealId       String   @default("HS-994821")
-  contractStart       String   @default("2027-01-01")
-  contractEnd         String   @default("2027-12-31")
+  hubspotDealId       String   @default("")
+  contractStart       String   @default("")
+  contractEnd         String   @default("")
   lineItemsJson       String   @default("[]")
   createdAt           DateTime @default(now())
 }
@@ -153,15 +156,15 @@ model Customer {
   status            String   @default("Paying") // Paying, Trial, Canceled
   source            String   @default("Deal Conversion")
   sourcePartnerName String
-  becamePayingDate  String   @default("2026-06-01")
-  bbid              String   @default("BB-1042")
+  becamePayingDate  String   @default("")
+  bbid              String   @default("")
   sourceDealId      String   @default("")
-  subscriptionPlan  String   @default("Enterprise Annual")
-  billingFrequency  String   @default("Yearly")
-  billingPeriod     String   @default("12 Months")
+  subscriptionPlan  String   @default("")
+  billingFrequency  String   @default("")
+  billingPeriod     String   @default("")
   canceledDate      String   @default("")
-  transactionsCount Int      @default(4)
-  revenuesSgd       Int      @default(1480000)
+  transactionsCount Int      @default(0)
+  revenuesBase      Int      @default(0)
   createdAt         DateTime @default(now())
 }
 
@@ -169,12 +172,12 @@ model Transaction {
   id           String   @id @default(cuid())
   name         String
   amount       Int
-  currency     String   @default("SGD")
-  amountSgd    Int
+  currency     String
+  amountBase   Int
   partnerName  String
   customerName String
   dealName     String
-  monthKey     String   @default("11/2026")
+  monthKey     String   @default("")
   createdAt    DateTime @default(now())
 }
 
@@ -185,10 +188,10 @@ model Reward {
   recipientName  String
   type           String   @default("Cash")
   amount         Int
-  currency       String   @default("SGD")
-  amountSgd      Int
+  currency       String
+  amountBase     Int
   fromActivity   String
-  fromRewardRule String   @default("15% Recurring Commission")
+  fromRewardRule String   @default("")
   status         String   @default("Pending") // Pending, Accepted, Paid, Refused
   payoutNumber   String   @default("")
   payoutId       String?
@@ -203,13 +206,13 @@ model Payout {
   name         String
   partnerName  String
   amount       Int
-  currency     String   @default("SGD")
-  amountSgd    Int
-  periodFrom   String   @default("2026-01-01")
-  periodTo     String   @default("2026-11-30")
-  rewardsCount Int      @default(3)
+  currency     String
+  amountBase   Int
+  periodFrom   String   @default("")
+  periodTo     String   @default("")
+  rewardsCount Int      @default(0)
   status       String   @default("Ready") // Draft, Pending, Ready, Paid
-  invoiceRef   String   @default("INV-2026-089")
+  invoiceRef   String   @default("")
   paidDate     String   @default("")
   createdAt    DateTime @default(now())
   rewards      Reward[]
@@ -223,56 +226,58 @@ model Task {
   dueDate         String
   dueTime         String   @default("09:00 AM")
   description     String
-  assignedTo      String   @default("Alex Morgan")
+  assignedToId    String?
+  assignedTo      String   @default("")
   associationType String   @default("Partner") // Partner, Lead, Deal
   associationName String
-  createdBy       String   @default("Alex Morgan")
+  createdBy       String   @default("")
   completedBy     String   @default("")
   completedDate   String   @default("")
   createdAt       DateTime @default(now())
 }
 
 model BusinessPlan {
-  id           String   @id @default(cuid())
-  name         String
-  partnerName  String
-  partnerOwner String   @default("Alex Morgan")
-  status       String   @default("Active") // Draft, Active, Completed
-  description  String
-  startDate    String
-  endDate      String
-  achievedPct  Int      @default(65)
-  targetRevSgd Int      @default(10000000)
-  createdAt    DateTime @default(now())
+  id            String   @id @default(cuid())
+  name          String
+  partnerName   String
+  partnerOwner  String   @default("")
+  status        String   @default("Active") // Draft, Active, Completed
+  description   String
+  startDate     String
+  endDate       String
+  achievedPct   Int      @default(0)
+  targetRevBase Int      @default(0)
+  createdAt     DateTime @default(now())
 }
 
 model AccountRecord {
   id                 String   @id @default(cuid())
   accountName        String
   type               String   @default("Prospect") // Customer, Opportunity, Prospect
-  ownerName          String   @default("Alex Morgan")
-  ownerEmail         String   @default("alex@r-prm.example.com")
-  source             String   @default("HubSpot CRM Sync")
-  importedDate       String   @default("2026-11-15")
-  hasOverlap         Boolean  @default(true)
-  partnerName        String   @default("Apex Cloud Solutions")
+  ownerName          String   @default("")
+  ownerEmail         String   @default("")
+  source             String   @default("")
+  importedDate       String   @default("")
+  hasOverlap         Boolean  @default(false)
+  partnerName        String   @default("")
   partnerAccountName String   @default("")
   partnerAccountType String   @default("Customer") // Customer, Opportunity, Prospect
-  partnerOwnerName   String   @default("Jordan Lee")
-  partnerOwnerEmail  String   @default("jordan@apexcloud.example.com")
-  overlapDate        String   @default("2026-11-16")
+  partnerOwnerName   String   @default("")
+  partnerOwnerEmail  String   @default("")
+  overlapDate        String   @default("")
   createdAt          DateTime @default(now())
 }
 
 model Collaboration {
   id               String   @id @default(cuid())
   name             String
-  status           String   @default("Accepted") // New, Accepted, Closed
-  owner            String   @default("Alex Morgan")
+  status           String   @default("New") // New, Accepted, Closed
+  ownerId          String?
+  owner            String   @default("")
   partnerName      String
   assignedContact  String
   accountName      String
-  lastActivityDate String   @default("2026-11-22")
+  lastActivityDate String   @default("")
   createdAt        DateTime @default(now())
 }
 
@@ -280,11 +285,11 @@ model DataSource {
   id               String   @id @default(cuid())
   name             String
   status           String   @default("Active")
-  sharedWith       String   @default("All Strategic Partners")
-  type             String   @default("CRM Connected") // CSV Upload, CRM Connected
-  accountType      String   @default("Customers & Opportunities")
-  lastImportedDate String   @default("2026-11-23")
-  createdBy        String   @default("Alex Morgan")
+  sharedWith       String   @default("")
+  type             String   @default("CSV Upload") // CSV Upload, CRM Connected
+  accountType      String   @default("")
+  lastImportedDate String   @default("")
+  createdBy        String   @default("")
   createdAt        DateTime @default(now())
 }
 
@@ -293,18 +298,18 @@ model TrackingLink {
   name              String
   targetUrl         String
   programId         String
-  partnerName       String   @default("Apex Cloud Solutions")
-  uniqueVisitors    Int      @default(420)
-  leadsCount        Int      @default(18)
-  customersCount    Int      @default(6)
-  transactionsCount Int      @default(14)
-  revenuesSgd       Int      @default(2840000)
+  partnerName       String   @default("")
+  uniqueVisitors    Int      @default(0)
+  leadsCount        Int      @default(0)
+  customersCount    Int      @default(0)
+  transactionsCount Int      @default(0)
+  revenuesBase      Int      @default(0)
   createdAt         DateTime @default(now())
 }
 
 model ManageItem {
   id           String   @id @default(cuid())
-  category     String   // assets, certifications, email_templates, groups, help_articles, integrations, news, partner_dashboards, directories, onboarding_pipelines, products, team, workflows, custom_properties, api_tokens
+  category     String   // assets, certifications, commission_templates, email_templates, groups, help_articles, integrations, news, partner_dashboards, directories, onboarding_pipelines, products, team, workflows, custom_properties, api_tokens
   name         String
   subtitle     String   @default("")
   status       String   @default("Active")
@@ -316,7 +321,7 @@ model NoteItem {
   id         String   @id @default(cuid())
   entityType String   // partner, lead, deal
   entityId   String
-  author     String   @default("Alex Morgan")
+  author     String   @default("")
   content    String
   isShared   Boolean  @default(true)
   createdAt  DateTime @default(now())
@@ -330,8 +335,8 @@ model AppSetting {
 
 model AuditLog {
   id         String   @id @default(cuid())
-  actor      String   @default("Alex Morgan")
-  actorRole  String   @default("Coworker (Admin)")
+  actor      String   @default("")
+  actorRole  String   @default("")
   action     String   // CREATE, UPDATE, DELETE, IMPERSONATE, VALIDATE, REFUSE, CLAWBACK, AUTH
   objectType String   // Partner, Program, Lead, Deal, Reward, Payout, Asset, Session, etc.
   objectId   String
@@ -388,5 +393,3 @@ model LoginLockout {
   lockedUntil DateTime?
   updatedAt   DateTime  @updatedAt
 }
-
-

@@ -5,11 +5,15 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { BackBreadcrumb, StatusBadge } from "@/components/SharedEngines";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 
 export default function CustomerDetailPage() {
   const params = useParams();
   const id = String(params?.id || "");
-  const { customers, transactions, deals } = usePrm();
+  const { customers, transactions, deals, settings } = usePrm();
+
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
 
   const customer = customers.find((c) => c.id === id);
   if (!customer) {
@@ -44,7 +48,8 @@ export default function CustomerDetailPage() {
           </div>
         </div>
         <span className="font-extrabold text-base text-blue-700">
-          Total Revenues: SGD {customer.revenuesSgd.toLocaleString()}
+          Total Revenues: {baseCurrency}{" "}
+          {(customer.revenuesBase || 0).toLocaleString()}
         </span>
       </div>
 
@@ -58,16 +63,20 @@ export default function CustomerDetailPage() {
             <span className="font-medium text-blue-600">{customer.email}</span>
             <span className="text-slate-500">Source Partner</span>
             <span className="font-bold text-blue-700">
-              {customer.sourcePartnerName}
+              {customer.sourcePartnerName || "—"}
             </span>
             <span className="text-slate-500">Source</span>
             <span className="font-medium">{customer.source}</span>
             <span className="text-slate-500">Became paying date</span>
-            <span className="font-medium">{customer.becamePayingDate}</span>
-            <span className="text-slate-500">BBID</span>
-            <span className="font-mono">{customer.bbid}</span>
+            <span className="font-medium">
+              {customer.becamePayingDate || "—"}
+            </span>
+            <span className="text-slate-500">External Billing ID</span>
+            <span className="font-mono">{customer.bbid || "—"}</span>
             <span className="text-slate-500">Subscription Plan</span>
-            <span className="font-semibold">{customer.subscriptionPlan}</span>
+            <span className="font-semibold">
+              {customer.subscriptionPlan || "—"}
+            </span>
             <span className="text-slate-500">Billing Frequency</span>
             <span className="font-medium">
               {customer.billingFrequency} ({customer.billingPeriod})
@@ -93,28 +102,34 @@ export default function CustomerDetailPage() {
             Customer Billing Transactions ({custTxs.length})
           </h3>
           <div className="divide-y divide-slate-100">
-            {custTxs.map((tx) => (
-              <div
-                key={tx.id}
-                className="py-3 flex items-center justify-between"
-              >
-                <div>
-                  <Link
-                    href={`/transactions/${tx.id}`}
-                    className="font-bold text-blue-700 hover:underline"
-                  >
-                    {tx.name}
-                  </Link>
-                  <p className="text-slate-500">
-                    Period: {tx.monthKey} · Partner: {tx.partnerName}
-                  </p>
+            {custTxs.length === 0 ? (
+              <p className="py-4 text-slate-400">
+                No billing transactions recorded yet.
+              </p>
+            ) : (
+              custTxs.map((tx) => (
+                <div
+                  key={tx.id}
+                  className="py-3 flex items-center justify-between"
+                >
+                  <div>
+                    <Link
+                      href={`/transactions/${tx.id}`}
+                      className="font-bold text-blue-700 hover:underline"
+                    >
+                      {tx.name}
+                    </Link>
+                    <p className="text-slate-500">
+                      Period: {tx.monthKey} · Partner: {tx.partnerName || "—"}
+                    </p>
+                  </div>
+                  <span className="font-bold text-slate-900">
+                    {tx.currency} {tx.amount.toLocaleString()} ({baseCurrency}{" "}
+                    {(tx.amountBase ?? tx.amount ?? 0).toLocaleString()})
+                  </span>
                 </div>
-                <span className="font-bold text-slate-900">
-                  {tx.currency} {tx.amount.toLocaleString()} (SGD{" "}
-                  {tx.amountSgd.toLocaleString()})
-                </span>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>

@@ -12,7 +12,6 @@ export default function PartnerTeamMembersPage() {
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
 
-  // §4.6 Row Selection + Bulk Action Bar State
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkRole, setBulkRole] = useState("Manager");
 
@@ -20,13 +19,28 @@ export default function PartnerTeamMembersPage() {
     firstName: "",
     lastName: "",
     email: "",
-    jobTitle: "Partner Account Rep",
-    phone: "+65 6800 1000",
-    linkedIn: "https://linkedin.com/in/partner-rep",
-    partnerName: "Apex Cloud Solutions Pte Ltd",
+    jobTitle: "",
+    phone: "",
+    linkedIn: "",
+    partnerName: "",
     role: "Sales Rep",
     portalAccess: true,
   });
+
+  const openModal = () => {
+    setForm({
+      firstName: "",
+      lastName: "",
+      email: "",
+      jobTitle: "",
+      phone: "",
+      linkedIn: "",
+      partnerName: partners[0]?.name || "",
+      role: "Sales Rep",
+      portalAccess: true,
+    });
+    setModalOpen(true);
+  };
 
   const filtered = teamMembers.filter((m) => {
     if (activeView !== "All" && m.status !== activeView) return false;
@@ -58,7 +72,6 @@ export default function PartnerTeamMembersPage() {
       `Partner team member ${form.firstName} ${form.lastName} added!`
     );
     setModalOpen(false);
-    setForm({ ...form, firstName: "", lastName: "", email: "" });
   };
 
   const handleBulkAction = async (
@@ -83,11 +96,10 @@ export default function PartnerTeamMembersPage() {
         search={search}
         onSearchChange={setSearch}
         primaryActionLabel="Add new team member"
-        onPrimaryAction={() => setModalOpen(true)}
+        onPrimaryAction={openModal}
       />
 
       <div className="max-w-[1440px] mx-auto px-6 py-5 space-y-3">
-        {/* §4.6 Bulk Action Bar when rows are selected */}
         {selectedIds.length > 0 && (
           <div className="p-3 rounded-xl bg-blue-600 text-white flex flex-wrap items-center justify-between gap-3 text-xs shadow">
             <span className="font-bold">
@@ -178,7 +190,9 @@ export default function PartnerTeamMembersPage() {
                   <td className="py-3 px-3 font-medium text-slate-800">
                     {m.partnerName}
                   </td>
-                  <td className="py-3 px-3 text-slate-600">{m.jobTitle}</td>
+                  <td className="py-3 px-3 text-slate-600">
+                    {m.jobTitle || "—"}
+                  </td>
                   <td className="py-3 px-3">
                     <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold">
                       {m.role}
@@ -187,7 +201,9 @@ export default function PartnerTeamMembersPage() {
                   <td className="py-3 px-3">
                     <StatusBadge status={m.status} />
                   </td>
-                  <td className="py-3 px-4 text-slate-500">{m.invitedAt}</td>
+                  <td className="py-3 px-4 text-slate-500">
+                    {m.invitedAt || "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -210,15 +226,17 @@ export default function PartnerTeamMembersPage() {
             <div className="p-5 space-y-3">
               <div>
                 <label className="block font-medium text-slate-700 mb-1">
-                  Partner organization
+                  Partner organization *
                 </label>
                 <select
+                  required
                   value={form.partnerName}
                   onChange={(e) =>
                     setForm({ ...form, partnerName: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
+                  <option value="">Select partner...</option>
                   {partners.map((p) => (
                     <option key={p.id} value={p.name}>
                       {p.name}
@@ -237,6 +255,7 @@ export default function PartnerTeamMembersPage() {
                     onChange={(e) =>
                       setForm({ ...form, firstName: e.target.value })
                     }
+                    placeholder="Jane"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -250,6 +269,7 @@ export default function PartnerTeamMembersPage() {
                     onChange={(e) =>
                       setForm({ ...form, lastName: e.target.value })
                     }
+                    placeholder="Doe"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -266,6 +286,7 @@ export default function PartnerTeamMembersPage() {
                     onChange={(e) =>
                       setForm({ ...form, email: e.target.value })
                     }
+                    placeholder="jane@acme.com"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -278,6 +299,7 @@ export default function PartnerTeamMembersPage() {
                     onChange={(e) =>
                       setForm({ ...form, phone: e.target.value })
                     }
+                    placeholder="+1 555 0100"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -292,6 +314,7 @@ export default function PartnerTeamMembersPage() {
                     onChange={(e) =>
                       setForm({ ...form, jobTitle: e.target.value })
                     }
+                    placeholder="Account Executive"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -319,6 +342,7 @@ export default function PartnerTeamMembersPage() {
                   onChange={(e) =>
                     setForm({ ...form, linkedIn: e.target.value })
                   }
+                  placeholder="https://linkedin.com/in/profile"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>

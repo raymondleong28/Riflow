@@ -4,6 +4,15 @@ import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { CheckCircle2, AlertTriangle } from "lucide-react";
 
+interface PublicWorkspaceMeta {
+  accountName: string;
+  logoText: string;
+  primaryColor: string;
+  leadConsentText: string;
+  leadConsentTermsLabel: string;
+  leadConsentTermsUrl: string;
+}
+
 export default function PublicPartnerLeadFormPage() {
   const params = useParams();
   const token = String(params?.uuid || "");
@@ -11,6 +20,15 @@ export default function PublicPartnerLeadFormPage() {
   const [checking, setChecking] = useState(true);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [partner, setPartner] = useState<any | null>(null);
+  const [workspace, setWorkspace] = useState<PublicWorkspaceMeta>({
+    accountName: "Workspace",
+    logoText: "R",
+    primaryColor: "#2563EB",
+    leadConsentText:
+      "I confirm that I have obtained permission from this prospect to share their business contact details.",
+    leadConsentTermsLabel: "Terms & Privacy Policy",
+    leadConsentTermsUrl: "",
+  });
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,12 +39,12 @@ export default function PublicPartnerLeadFormPage() {
     jobTitle: "",
     email: "",
     phone: "",
-    country: "Singapore",
+    country: "",
     retailBrand: "",
-    outletsCount: "3",
-    posSolution: "CloudPOS Pro",
+    outletsCount: "",
+    posSolution: "",
     remarks: "",
-    consentTerms72: false,
+    consentConfirmed: false,
   });
 
   useEffect(() => {
@@ -36,11 +54,14 @@ export default function PublicPartnerLeadFormPage() {
           `/api/public-forms?leadToken=${encodeURIComponent(token)}`,
           { cache: "no-store" }
         );
-        if (!res.ok) {
+        const json = await res.json().catch(() => null);
+        if (json?.workspace) {
+          setWorkspace(json.workspace);
+        }
+        if (!res.ok || !json?.valid) {
           setPartner(null);
         } else {
-          const json = await res.json();
-          setPartner(json.valid ? json.partner : null);
+          setPartner(json.partner);
         }
       } catch {
         setPartner(null);
@@ -54,10 +75,8 @@ export default function PublicPartnerLeadFormPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!form.consentTerms72) {
-      setError(
-        "Please confirm prospect data consent under Eber General Terms 7.2."
-      );
+    if (!form.consentConfirmed) {
+      setError("Please confirm prospect data consent before submitting.");
       return;
     }
 
@@ -88,7 +107,6 @@ export default function PublicPartnerLeadFormPage() {
     );
   }
 
-  // §13.1 & §13.7 #5: Reject unknown or guessable raw partner IDs with "This link isn't valid"
   if (!partner) {
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
@@ -98,9 +116,9 @@ export default function PublicPartnerLeadFormPage() {
             This link isn&apos;t valid
           </h1>
           <p className="text-slate-600">
-            This referral lead form URL is invalid or has expired. Please
-            request an updated personal referral link from your R-Cloud Partner
-            representative.
+            This referral lead form URL is invalid or has been rotated. Please
+            request an updated personal referral link from your{" "}
+            {workspace.accountName} partner representative.
           </p>
         </div>
       </div>
@@ -110,13 +128,16 @@ export default function PublicPartnerLeadFormPage() {
   return (
     <div className="min-h-screen bg-slate-100 py-12 px-4 flex items-center justify-center">
       <div className="bg-white rounded-2xl max-w-xl w-full shadow-xl border border-slate-200 overflow-hidden text-xs">
-        <div className="p-6 bg-blue-600 text-white flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-white text-blue-700 font-extrabold text-xl flex items-center justify-center">
-            R
+        <div
+          style={{ backgroundColor: workspace.primaryColor || "#2563EB" }}
+          className="p-6 text-white flex items-center space-x-3"
+        >
+          <div className="w-10 h-10 rounded-xl bg-white text-slate-900 font-extrabold text-xl flex items-center justify-center">
+            {workspace.logoText || "R"}
           </div>
           <div>
-            <span className="text-[10px] uppercase tracking-wider bg-blue-800 px-2 py-0.5 rounded font-bold">
-              Verified Partner Referral Form
+            <span className="text-[10px] uppercase tracking-wider bg-black/20 px-2 py-0.5 rounded font-bold">
+              {workspace.accountName} · Verified Partner Referral Form
             </span>
             <h1 className="text-lg font-extrabold mt-1">
               Referred by {partner.name}
@@ -135,7 +156,23 @@ export default function PublicPartnerLeadFormPage() {
               ).
             </p>
             <button
-              onClick={() => setSubmitted(false)}
+              onClick={() => {
+                setForm({
+                  firstName: "",
+                  lastName: "",
+                  company: "",
+                  jobTitle: "",
+                  email: "",
+                  phone: "",
+                  country: "",
+                  retailBrand: "",
+                  outletsCount: "",
+                  posSolution: "",
+                  remarks: "",
+                  consentConfirmed: false,
+                });
+                setSubmitted(false);
+              }}
               className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold"
             >
               Submit Another Referral Lead
@@ -160,6 +197,7 @@ export default function PublicPartnerLeadFormPage() {
                   onChange={(e) =>
                     setForm({ ...form, firstName: e.target.value })
                   }
+                  placeholder="Jane"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -173,6 +211,7 @@ export default function PublicPartnerLeadFormPage() {
                   onChange={(e) =>
                     setForm({ ...form, lastName: e.target.value })
                   }
+                  placeholder="Doe"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -189,6 +228,7 @@ export default function PublicPartnerLeadFormPage() {
                   onChange={(e) =>
                     setForm({ ...form, company: e.target.value })
                   }
+                  placeholder="Acme Ltd"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -201,6 +241,7 @@ export default function PublicPartnerLeadFormPage() {
                   type="email"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  placeholder="jane@acme.com"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -214,6 +255,7 @@ export default function PublicPartnerLeadFormPage() {
                 <input
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  placeholder="+1 555 0100"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -221,29 +263,27 @@ export default function PublicPartnerLeadFormPage() {
                 <label className="block font-semibold text-slate-700 mb-1">
                   Country
                 </label>
-                <select
+                <input
                   value={form.country}
                   onChange={(e) =>
                     setForm({ ...form, country: e.target.value })
                   }
+                  placeholder="Malaysia"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                >
-                  <option>Singapore</option>
-                  <option>Malaysia</option>
-                  <option>Australia</option>
-                  <option>United Kingdom</option>
-                </select>
+                />
               </div>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Outlets Count
+                  Locations / Seats
                 </label>
                 <input
                   type="number"
+                  min={0}
                   value={form.outletsCount}
                   onChange={(e) =>
                     setForm({ ...form, outletsCount: e.target.value })
                   }
+                  placeholder="0"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -257,26 +297,38 @@ export default function PublicPartnerLeadFormPage() {
                 rows={2}
                 value={form.remarks}
                 onChange={(e) => setForm({ ...form, remarks: e.target.value })}
+                placeholder="Project scope or context..."
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg"
               />
             </div>
 
-            {/* Required Consent Checkbox — Eber General Terms 7.2 (§13.1 & §13.7 #5) */}
             <label className="flex items-start space-x-2.5 p-3 rounded-xl bg-blue-50/70 border border-blue-200 cursor-pointer">
               <input
                 required
                 type="checkbox"
-                checked={form.consentTerms72}
+                checked={form.consentConfirmed}
                 onChange={(e) =>
-                  setForm({ ...form, consentTerms72: e.target.checked })
+                  setForm({ ...form, consentConfirmed: e.target.checked })
                 }
                 className="mt-0.5 rounded text-blue-600"
               />
               <span className="text-slate-700 leading-relaxed">
-                I confirm that I have obtained the prospect&apos;s prior consent
-                to share their contact and business details with Eber in
-                accordance with <strong>Eber General Terms 7.2</strong> and
-                applicable data protection laws (PDPA / GDPR). *
+                {workspace.leadConsentText}{" "}
+                {workspace.leadConsentTermsUrl ? (
+                  <>
+                    (
+                    <a
+                      href={workspace.leadConsentTermsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-blue-700 font-semibold underline"
+                    >
+                      {workspace.leadConsentTermsLabel || "Terms & Privacy Policy"}
+                    </a>
+                    ){" "}
+                  </>
+                ) : null}
+                *
               </span>
             </label>
 

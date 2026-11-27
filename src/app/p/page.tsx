@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, Suspense } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/SharedEngines";
 import {
   canPartnerAccessAsset,
   getPartnerLevelRules,
+  SUPPORTED_CURRENCIES,
 } from "@/lib/prmEngine";
 import {
   Award,
@@ -20,6 +21,7 @@ import {
   ShieldAlert,
   LogOut,
   CheckCircle2,
+  AlertTriangle,
 } from "lucide-react";
 
 const PORTAL_NAV = [
@@ -48,27 +50,32 @@ function StandalonePartnerPortalContent() {
     payouts,
     manageItems,
     teamMembers,
+    settings,
     session,
+    loading,
     mutate,
+    showToast,
   } = usePrm();
 
   const [activeNav, setActiveNav] =
     useState<(typeof PORTAL_NAV)[number]>("Home");
 
-  // Determine partner strictly from server session (or impersonated partner)
+  // Determine partner strictly from server session or explicit coworker query param — never fall back to a default ID or partners[0]
   const targetPartnerId =
     session?.identityType === "partner"
-      ? session.partnerId
+      ? session.partnerId || ""
       : session?.impersonatingPartnerId ||
         searchParams.get("partnerId") ||
-        "prt-1";
+        "";
 
-  const partner =
-    partners.find((p) => p.id === targetPartnerId) || partners[0];
-  const program =
-    programs.find(
-      (pr) => pr.id === partner?.programId || pr.name === partner?.programName
-    ) || programs[0];
+  const partner = partners.find((p) => p.id === targetPartnerId);
+  const program = programs.find(
+    (pr) => pr.id === partner?.programId || pr.name === partner?.programName
+  );
+
+  const acct = settings?.account_settings || {};
+  const baseCurrency =
+    acct.mainCurrency || partner?.currency || SUPPORTED_CURRENCIES[0];
 
   const role: "Manager" | "SalesRep" | "Stakeholder" =
     session?.identityType === "partner"
@@ -81,36 +88,102 @@ function StandalonePartnerPortalContent() {
     session?.identityType === "coworker" ||
     searchParams.get("impersonate") === "true";
 
-  // Form states
+  // Form states (empty initial values, no prefilled demo data)
   const [dealName, setDealName] = useState("");
   const [dealCompany, setDealCompany] = useState("");
-  const [dealAmount, setDealAmount] = useState("22000");
+  const [dealAmount, setDealAmount] = useState("");
 
   const [leadFirst, setLeadFirst] = useState("");
   const [leadLast, setLeadLast] = useState("");
   const [leadCompany, setLeadCompany] = useState("");
   const [leadEmail, setLeadEmail] = useState("");
 
-  const [selfInvoicingOptIn, setSelfInvoicingOptIn] = useState(true);
-  const [bankName, setBankName] = useState("DBS Corporate Bank Singapore");
-  const [swiftCode, setSwiftCode] = useState("DBSSSGSG");
-  const [accountNumber, setAccountNumber] = useState("003-948271-8");
+  const [selfInvoicingOptIn, setSelfInvoicingOptIn] = useState(false);
+  const [bankName, setBankName] = useState("");
+  const [swiftCode, setSwiftCode] = useState("");
+  const [accountNumber, setAccountNumber] = useState("");
 
-  if (!partner) {
+  useEffect(() => {
+    if (!partner?.id) return;
+    fetch(`/api/partners?id=${encodeURIComponent(partner.id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p) => {
+        if (!p?.bankDetailsJson) return;
+        try {
+          const parsed = JSON.parse(p.bankDetailsJson);
+          if (typeof parsed.selfInvoicingOptIn === "boolean") {
+            setSelfInvoicingOptIn(parsed.selfInvoicingOptIn);
+          }
+          if (parsed.bankName) setBankName(String(parsed.bankName));
+          if (parsed.swiftCode) setSwiftCode(String(parsed.swiftCode));
+          if (parsed.accountNumber)
+            setAccountNumber(String(parsed.accountNumber));
+        } catch {
+          // ignore invalid or encrypted blob
+        }
+      })
+      .catch(() => {});
+  }, [partner?.id]);
+
+  const handleLogout = async () => {
+    await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "logout" }),
+    });
+    window.location.href = "/p/login";
+  };
+
+  if (loading) {
     return (
       <div className="p-8 text-xs text-slate-500">Loading Partner Portal...</div>
     );
   }
 
-  // §13.1 Fix: Read the partner's ACTUAL level rules from their Program!
-  // (e.g. Apex on Platinum Elite displays "25% Recurring Deal Commission + 5% Annual Milestone Kickback", never hardcoded 18%!)
+  if (!partner) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="bg-white rounded-2xl max-w-md w-full p-8 border border-slate-200 shadow-sm text-center space-y-3 text-xs">
+          <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto" />
+          <h1 className="text-base font-bold text-slate-900">
+            Partner Record Not Found
+          </h1>
+          <p className="text-slate-600">
+            {session?.identityType === "coworker"
+              ? "Select a partner from the Partner Directory to preview or impersonate their portal."
+              : "No active partner profile is linked to this session."}
+          </p>
+          <div className="flex items-center justify-center gap-2 pt-2">
+            {session?.identityType === "coworker" ? (
+              <Link
+                href="/partners/views/all"
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold"
+              >
+                Open Partner Directory →
+              </Link>
+            ) : (
+              <button
+                onClick={handleLogout}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold"
+              >
+                Return to Partner Sign In
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const levelRules = getPartnerLevelRules(partner, programs);
   const levelRulesSummary =
     levelRules.length > 0
       ? levelRules.map((r) => r.title).join(" + ")
-      : "Standard Tier Commission";
+      : "No commission rules configured";
 
-  const personalLeadFormUrl = `/forms/lead/${partner.leadFormToken || ""}`;
+  const personalLeadFormUrl = partner.leadFormToken
+    ? `/forms/lead/${partner.leadFormToken}`
+    : "";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let perms: Record<string, Record<string, any>> = {};
@@ -142,22 +215,28 @@ function StandalonePartnerPortalContent() {
   const handlePortalRegisterDeal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canRegisterDeals) return;
+    const numericAmount = Number(dealAmount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      showToast("Please enter a positive deal amount.");
+      return;
+    }
     await mutate(
       "CREATE_DEAL",
       {
         name: dealName,
         company: dealCompany,
-        clientName: `${dealCompany} Buyer`,
-        amount: Number(dealAmount) || 15000,
-        currency: partner.currency || "SGD",
+        clientName: dealCompany,
+        amount: numericAmount,
+        currency: partner.currency || baseCurrency,
         partnerName: partner.name,
-        assignedContact: `${partner.contactFirstName} ${partner.contactLastName}`,
+        assignedContact: `${partner.contactFirstName} ${partner.contactLastName}`.trim(),
         stage: "Discovery Stage",
       },
       `Deal "${dealName}" registered from ${partner.name} Partner Portal!`
     );
     setDealName("");
     setDealCompany("");
+    setDealAmount("");
   };
 
   const handlePortalSubmitLead = async (e: React.FormEvent) => {
@@ -167,12 +246,12 @@ function StandalonePartnerPortalContent() {
       "CREATE_LEAD",
       {
         firstName: leadFirst,
-        lastName: leadLast || "Contact",
+        lastName: leadLast,
         company: leadCompany,
-        email: leadEmail || "prospect@client.example.com",
+        email: leadEmail,
         sourcePartnerName: partner.name,
         assignedPartner: partner.name,
-        assignedContact: `${partner.contactFirstName} ${partner.contactLastName}`,
+        assignedContact: `${partner.contactFirstName} ${partner.contactLastName}`.trim(),
         source: "Partner Portal",
       },
       `Lead "${leadFirst} ${leadLast}" submitted from Partner Portal!`
@@ -192,14 +271,23 @@ function StandalonePartnerPortalContent() {
     router.push(`/partners/${partner.id}`);
   };
 
-  const handleLogout = async () => {
-    await fetch("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "logout" }),
-    });
-    window.location.href = "/p/login";
-  };
+  // Parse onboarding stages from the partner's assigned pipeline if available
+  const assignedPipelineItem = manageItems.find(
+    (m) =>
+      m.category === "onboarding_pipelines" &&
+      m.name === partner.onboardingPipeline
+  );
+  let pipelineStages: Array<{ title: string; actionType?: string }> = [];
+  if (assignedPipelineItem?.metadataJson) {
+    try {
+      const meta = JSON.parse(assignedPipelineItem.metadataJson);
+      if (Array.isArray(meta.stages)) {
+        pipelineStages = meta.stages;
+      }
+    } catch {
+      pipelineStages = [];
+    }
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
@@ -224,16 +312,21 @@ function StandalonePartnerPortalContent() {
       {/* Standalone Partner Portal Header */}
       <header className="bg-white border-b border-slate-200 px-6 h-14 flex items-center justify-between shadow-sm">
         <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 rounded-lg bg-blue-600 text-white font-extrabold text-lg flex items-center justify-center">
-            R
+          <div
+            style={{ backgroundColor: acct.primaryColor || "#2563EB" }}
+            className="w-8 h-8 rounded-lg text-white font-extrabold text-lg flex items-center justify-center"
+          >
+            {acct.logoText || "R"}
           </div>
           <div>
             <span className="font-bold text-sm text-slate-900">
               {partner.name}
             </span>
-            <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-              {partner.qualifyingLevel}
-            </span>
+            {partner.qualifyingLevel && (
+              <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                {partner.qualifyingLevel}
+              </span>
+            )}
           </div>
         </div>
 
@@ -281,7 +374,7 @@ function StandalonePartnerPortalContent() {
                   <Award className="w-4 h-4" />
                 </div>
                 <p className="text-xl font-extrabold text-slate-900 mt-1">
-                  {partner.qualifyingLevel}
+                  {partner.qualifyingLevel || "Unassigned"}
                 </p>
                 <p className="text-blue-700 font-semibold mt-0.5">
                   {levelRulesSummary}
@@ -296,7 +389,8 @@ function StandalonePartnerPortalContent() {
                   {myDeals.length} Deals
                 </p>
                 <p className="text-slate-500 mt-0.5">
-                  Won Sourced: SGD {partner.sourcedRevenue365d.toLocaleString()}
+                  Won Sourced: {baseCurrency}{" "}
+                  {(partner.sourcedRevenue365d || 0).toLocaleString()}
                 </p>
               </div>
               <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
@@ -307,13 +401,15 @@ function StandalonePartnerPortalContent() {
                 <p className="text-xl font-extrabold text-slate-900 mt-1">
                   {myLeads.length} Leads
                 </p>
-                <Link
-                  href={personalLeadFormUrl}
-                  className="text-blue-600 hover:underline font-semibold inline-flex items-center space-x-1 mt-0.5"
-                >
-                  <span>Use your personal lead form</span>
-                  <ExternalLink className="w-3 h-3" />
-                </Link>
+                {personalLeadFormUrl && (
+                  <Link
+                    href={personalLeadFormUrl}
+                    className="text-blue-600 hover:underline font-semibold inline-flex items-center space-x-1 mt-0.5"
+                  >
+                    <span>Use your personal lead form</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </Link>
+                )}
               </div>
               <div className="bg-white rounded-xl border border-emerald-200 p-4 shadow-sm">
                 <div className="flex items-center justify-between text-emerald-700 font-bold">
@@ -321,7 +417,8 @@ function StandalonePartnerPortalContent() {
                   <Gift className="w-4 h-4" />
                 </div>
                 <p className="text-xl font-extrabold text-emerald-700 mt-1">
-                  SGD {partner.pendingRewardsAll.toLocaleString()}
+                  {baseCurrency}{" "}
+                  {(partner.pendingRewardsAll || 0).toLocaleString()}
                 </p>
                 <p className="text-slate-500 mt-0.5">
                   {myRewards.length} total reward records
@@ -363,10 +460,14 @@ function StandalonePartnerPortalContent() {
                       />
                       <div className="flex space-x-1.5">
                         <input
+                          required
                           type="number"
+                          min="0.01"
+                          step="any"
                           value={dealAmount}
                           onChange={(e) => setDealAmount(e.target.value)}
-                          className="w-20 px-2 py-1.5 border border-slate-300 rounded-lg bg-white"
+                          placeholder={`Amount (${partner.currency || baseCurrency}) *`}
+                          className="w-28 px-2 py-1.5 border border-slate-300 rounded-lg bg-white"
                         />
                         <button
                           type="submit"
@@ -378,25 +479,31 @@ function StandalonePartnerPortalContent() {
                     </form>
                   )}
                   <div className="divide-y divide-slate-100">
-                    {myDeals.map((d) => (
-                      <div
-                        key={d.id}
-                        className="py-2.5 flex items-center justify-between"
-                      >
-                        <div>
-                          <p className="font-bold text-slate-900">{d.name}</p>
-                          <p className="text-slate-500">
-                            {d.company} · Stage: {d.stage}
-                          </p>
+                    {myDeals.length === 0 ? (
+                      <p className="py-4 text-slate-400 text-center">
+                        No registered deals yet.
+                      </p>
+                    ) : (
+                      myDeals.map((d) => (
+                        <div
+                          key={d.id}
+                          className="py-2.5 flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="font-bold text-slate-900">{d.name}</p>
+                            <p className="text-slate-500">
+                              {d.company} · Stage: {d.stage}
+                            </p>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-blue-700">
+                              {d.currency} {d.amount.toLocaleString()}
+                            </span>
+                            <StatusBadge status={d.status} />
+                          </div>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-blue-700">
-                            {d.currency} {d.amount.toLocaleString()}
-                          </span>
-                          <StatusBadge status={d.status} />
-                        </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </div>
               )}
@@ -407,18 +514,20 @@ function StandalonePartnerPortalContent() {
                     <h2 className="font-bold text-sm text-slate-900">
                       Submit a Referral Lead
                     </h2>
-                    <Link
-                      href={personalLeadFormUrl}
-                      className="text-blue-600 hover:underline font-semibold flex items-center space-x-1"
-                    >
-                      <span>Use your personal lead form</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </Link>
+                    {personalLeadFormUrl && (
+                      <Link
+                        href={personalLeadFormUrl}
+                        className="text-blue-600 hover:underline font-semibold flex items-center space-x-1"
+                      >
+                        <span>Use your personal lead form</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </Link>
+                    )}
                   </div>
                   {canSubmitLeads ? (
                     <form
                       onSubmit={handlePortalSubmitLead}
-                      className="grid grid-cols-1 md:grid-cols-4 gap-2 p-3 rounded-xl bg-blue-50/50 border border-blue-100"
+                      className="grid grid-cols-1 md:grid-cols-5 gap-2 p-3 rounded-xl bg-blue-50/50 border border-blue-100"
                     >
                       <input
                         required
@@ -428,9 +537,10 @@ function StandalonePartnerPortalContent() {
                         className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                       />
                       <input
+                        required
                         value={leadLast}
                         onChange={(e) => setLeadLast(e.target.value)}
-                        placeholder="Last name"
+                        placeholder="Last name *"
                         className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                       />
                       <input
@@ -438,6 +548,14 @@ function StandalonePartnerPortalContent() {
                         value={leadCompany}
                         onChange={(e) => setLeadCompany(e.target.value)}
                         placeholder="Company *"
+                        className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+                      />
+                      <input
+                        required
+                        type="email"
+                        value={leadEmail}
+                        onChange={(e) => setLeadEmail(e.target.value)}
+                        placeholder="Work email *"
                         className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                       />
                       <button
@@ -453,22 +571,29 @@ function StandalonePartnerPortalContent() {
                     </p>
                   )}
                   <div className="divide-y divide-slate-100">
-                    {myLeads.map((l) => (
-                      <div
-                        key={l.id}
-                        className="py-2.5 flex items-center justify-between"
-                      >
-                        <div>
-                          <p className="font-bold text-slate-900">
-                            {l.firstName} {l.lastName} · {l.company}
-                          </p>
-                          <p className="text-slate-500">
-                            Submitted {l.assignedDate} · Deadline {l.deadline}
-                          </p>
+                    {myLeads.length === 0 ? (
+                      <p className="py-4 text-slate-400 text-center">
+                        No submitted leads yet.
+                      </p>
+                    ) : (
+                      myLeads.map((l) => (
+                        <div
+                          key={l.id}
+                          className="py-2.5 flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="font-bold text-slate-900">
+                              {l.firstName} {l.lastName} · {l.company}
+                            </p>
+                            <p className="text-slate-500">
+                              Submitted {l.assignedDate || "—"}
+                              {l.deadline ? ` · Deadline ${l.deadline}` : ""}
+                            </p>
+                          </div>
+                          <StatusBadge status={l.status} />
                         </div>
-                        <StatusBadge status={l.status} />
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </div>
               )}
@@ -482,12 +607,14 @@ function StandalonePartnerPortalContent() {
               <h2 className="font-bold text-base text-slate-900">
                 My Leads ({myLeads.length})
               </h2>
-              <Link
-                href={personalLeadFormUrl}
-                className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-semibold"
-              >
-                Use your personal lead form ↗
-              </Link>
+              {personalLeadFormUrl && (
+                <Link
+                  href={personalLeadFormUrl}
+                  className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-semibold"
+                >
+                  Use your personal lead form ↗
+                </Link>
+              )}
             </div>
             <table className="w-full text-left border-collapse">
               <thead>
@@ -510,7 +637,7 @@ function StandalonePartnerPortalContent() {
                       <StatusBadge status={l.status} />
                     </td>
                     <td className="py-2.5 px-3">{l.assignedContact}</td>
-                    <td className="py-2.5 px-3">{l.deadline}</td>
+                    <td className="py-2.5 px-3">{l.deadline || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -550,7 +677,7 @@ function StandalonePartnerPortalContent() {
                     <td className="py-2.5 px-3 text-right font-bold">
                       {d.currency} {d.amount.toLocaleString()}
                     </td>
-                    <td className="py-2.5 px-3">{d.expirationDate}</td>
+                    <td className="py-2.5 px-3">{d.expirationDate || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -564,26 +691,30 @@ function StandalonePartnerPortalContent() {
               My Commission Rewards ({myRewards.length})
             </h2>
             <div className="divide-y divide-slate-100">
-              {myRewards.map((r) => (
-                <div
-                  key={r.id}
-                  className="py-3 flex items-center justify-between"
-                >
-                  <div>
-                    <p className="font-bold text-slate-900">
-                      {r.rewardNumber} · {r.fromActivity}
-                    </p>
-                    <p className="text-slate-500">{r.fromRewardRule}</p>
+              {myRewards.length === 0 ? (
+                <p className="py-4 text-slate-400">No rewards recorded yet.</p>
+              ) : (
+                myRewards.map((r) => (
+                  <div
+                    key={r.id}
+                    className="py-3 flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="font-bold text-slate-900">
+                        {r.rewardNumber} · {r.fromActivity}
+                      </p>
+                      <p className="text-slate-500">{r.fromRewardRule}</p>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <span className="font-bold text-blue-700">
+                        {r.currency} {r.amount.toLocaleString()} ({baseCurrency}{" "}
+                        {(r.amountBase ?? r.amount ?? 0).toLocaleString()})
+                      </span>
+                      <StatusBadge status={r.status} />
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <span className="font-bold text-blue-700">
-                      {r.currency} {r.amount.toLocaleString()} (SGD{" "}
-                      {r.amountSgd.toLocaleString()})
-                    </span>
-                    <StatusBadge status={r.status} />
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}
@@ -600,7 +731,9 @@ function StandalonePartnerPortalContent() {
                   <th className="py-2.5 px-3">Name</th>
                   <th className="py-2.5 px-3">Period</th>
                   <th className="py-2.5 px-3 text-right">Rewards</th>
-                  <th className="py-2.5 px-3 text-right">Amount</th>
+                  <th className="py-2.5 px-3 text-right">
+                    Amount ({baseCurrency})
+                  </th>
                   <th className="py-2.5 px-3">Status</th>
                   <th className="py-2.5 px-3">Paid Date</th>
                 </tr>
@@ -617,7 +750,8 @@ function StandalonePartnerPortalContent() {
                     </td>
                     <td className="py-2.5 px-3 text-right">{po.rewardsCount}</td>
                     <td className="py-2.5 px-3 text-right font-bold">
-                      SGD {po.amountSgd.toLocaleString()}
+                      {baseCurrency}{" "}
+                      {(po.amountBase ?? po.amount ?? 0).toLocaleString()}
                     </td>
                     <td className="py-2.5 px-3">
                       <StatusBadge status={po.status} />
@@ -635,66 +769,45 @@ function StandalonePartnerPortalContent() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="font-bold text-base text-slate-900">
-                  My Onboarding Checklist — {partner.onboardingPipeline}
+                  My Onboarding Checklist — {partner.onboardingPipeline || "Unassigned"}
                 </h2>
                 <p className="text-slate-500">
-                  Current Stage: <strong>{partner.onboardingStage}</strong> (
-                  {partner.onboardingStatus})
+                  Current Stage: <strong>{partner.onboardingStage || "—"}</strong>{" "}
+                  ({partner.onboardingStatus})
                 </p>
               </div>
               <StatusBadge status={partner.onboardingStatus} />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {[
-                {
-                  type: "View asset",
-                  title: "1. Review 2026 Enterprise Partner Pitch Deck",
-                  status: "Completed",
-                },
-                {
-                  type: "Read article",
-                  title: "2. Read Deal Registration Protection Guidelines",
-                  status: "Completed",
-                },
-                {
-                  type: "Upload document",
-                  title: "3. Upload Signed Master Reseller Agreement",
-                  status: "Completed",
-                },
-                {
-                  type: "Provide information",
-                  title: "4. Submit Regional Sales Headcount & Territory Form",
-                  status: "Completed",
-                },
-                {
-                  type: "Book meeting",
-                  title: "5. Book Kickoff Call via Calendly",
-                  status: "Completed",
-                },
-                {
-                  type: "Opt-in/out from self-invoicing",
-                  title: "6. Confirm Self-Invoicing Preference",
-                  status: selfInvoicingOptIn ? "Opted In" : "Opted Out",
-                },
-              ].map((act) => (
-                <div
-                  key={act.title}
-                  className="p-3.5 rounded-xl border border-slate-200 flex items-center justify-between"
-                >
-                  <div>
-                    <span className="text-[10px] font-bold uppercase text-blue-700">
-                      {act.type}
+            {pipelineStages.length === 0 ? (
+              <p className="text-slate-500 py-4">
+                No onboarding checklist stages configured for this pipeline yet.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {pipelineStages.map((act, idx) => (
+                  <div
+                    key={`${act.title}-${idx}`}
+                    className="p-3.5 rounded-xl border border-slate-200 flex items-center justify-between"
+                  >
+                    <div>
+                      <span className="text-[10px] font-bold uppercase text-blue-700">
+                        {act.actionType || "Stage"}
+                      </span>
+                      <p className="font-bold text-slate-900">{act.title}</p>
+                    </div>
+                    <span className="text-emerald-700 font-semibold flex items-center space-x-1">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>
+                        {partner.onboardingStage === act.title
+                          ? "Current"
+                          : partner.onboardingStatus}
+                      </span>
                     </span>
-                    <p className="font-bold text-slate-900">{act.title}</p>
                   </div>
-                  <span className="text-emerald-700 font-semibold flex items-center space-x-1">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>{act.status}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -706,50 +819,61 @@ function StandalonePartnerPortalContent() {
               </h2>
               <p className="text-slate-500">
                 Showing only assets authorized for{" "}
-                <strong>{partner.programName}</strong> ({partner.qualifyingLevel}
-                ) and group <strong>{partner.groupName}</strong>.
+                <strong>{partner.programName}</strong>
+                {partner.qualifyingLevel
+                  ? ` (${partner.qualifyingLevel})`
+                  : ""}
+                {partner.groupName ? ` and group ${partner.groupName}` : ""}.
               </p>
             </div>
             <div className="divide-y divide-slate-100">
-              {scopedAssets.map((a) => {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const assetAny = a as any;
-                let fileUrl =
-                  assetAny.fileUrl ||
-                  "/api/files/R-PRM_2026_Enterprise_Pitch_Deck.pdf";
-                let fileName = assetAny.fileName || a.name;
-                if (a.metadataJson) {
-                  try {
-                    const meta = JSON.parse(a.metadataJson);
-                    if (meta.fileUrl) fileUrl = meta.fileUrl;
-                    if (meta.fileName) fileName = meta.fileName;
-                  } catch {
-                    // fallback
+              {scopedAssets.length === 0 ? (
+                <p className="py-4 text-slate-400">
+                  No enablement assets shared yet.
+                </p>
+              ) : (
+                scopedAssets.map((a) => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const assetAny = a as any;
+                  let fileUrl = assetAny.fileUrl || "";
+                  let fileName = assetAny.fileName || a.name;
+                  if (a.metadataJson) {
+                    try {
+                      const meta = JSON.parse(a.metadataJson);
+                      if (meta.fileUrl) fileUrl = meta.fileUrl;
+                      if (meta.fileName) fileName = meta.fileName;
+                    } catch {
+                      // ignore
+                    }
                   }
-                }
-                return (
-                  <div
-                    key={a.id}
-                    className="py-3 flex items-center justify-between"
-                  >
-                    <div>
-                      <p className="font-bold text-slate-900">{a.name}</p>
-                      <p className="text-slate-500">{a.subtitle}</p>
-                    </div>
-                    <a
-                      href={fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      download={fileName}
-                      className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-semibold border border-blue-200 flex items-center space-x-1"
+                  return (
+                    <div
+                      key={a.id}
+                      className="py-3 flex items-center justify-between"
                     >
-                      <Paperclip className="w-3.5 h-3.5" />
-                      <span>Download</span>
-                      <Download className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-                );
-              })}
+                      <div>
+                        <p className="font-bold text-slate-900">{a.name}</p>
+                        <p className="text-slate-500">{a.subtitle}</p>
+                      </div>
+                      {fileUrl ? (
+                        <a
+                          href={fileUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          download={fileName}
+                          className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-semibold border border-blue-200 flex items-center space-x-1"
+                        >
+                          <Paperclip className="w-3.5 h-3.5" />
+                          <span>Download</span>
+                          <Download className="w-3.5 h-3.5" />
+                        </a>
+                      ) : (
+                        <span className="text-slate-400">No file attached</span>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -759,15 +883,19 @@ function StandalonePartnerPortalContent() {
             <h2 className="font-bold text-base text-slate-900">
               Partner Help Center Articles ({helpArticles.length})
             </h2>
-            {helpArticles.map((art) => (
-              <div
-                key={art.id}
-                className="p-3.5 rounded-xl border border-slate-200 space-y-1"
-              >
-                <p className="font-bold text-slate-900">{art.name}</p>
-                <p className="text-slate-500">{art.subtitle}</p>
-              </div>
-            ))}
+            {helpArticles.length === 0 ? (
+              <p className="text-slate-400 py-2">No articles published yet.</p>
+            ) : (
+              helpArticles.map((art) => (
+                <div
+                  key={art.id}
+                  className="p-3.5 rounded-xl border border-slate-200 space-y-1"
+                >
+                  <p className="font-bold text-slate-900">{art.name}</p>
+                  <p className="text-slate-500">{art.subtitle}</p>
+                </div>
+              ))
+            )}
           </div>
         )}
 
@@ -776,15 +904,21 @@ function StandalonePartnerPortalContent() {
             <h2 className="font-bold text-base text-slate-900">
               Partner Announcements &amp; News ({newsItems.length})
             </h2>
-            {newsItems.map((n) => (
-              <div
-                key={n.id}
-                className="p-3.5 rounded-xl border border-slate-200 space-y-1"
-              >
-                <p className="font-bold text-slate-900">{n.name}</p>
-                <p className="text-slate-500">{n.subtitle}</p>
-              </div>
-            ))}
+            {newsItems.length === 0 ? (
+              <p className="text-slate-400 py-2">
+                No announcements published yet.
+              </p>
+            ) : (
+              newsItems.map((n) => (
+                <div
+                  key={n.id}
+                  className="p-3.5 rounded-xl border border-slate-200 space-y-1"
+                >
+                  <p className="font-bold text-slate-900">{n.name}</p>
+                  <p className="text-slate-500">{n.subtitle}</p>
+                </div>
+              ))
+            )}
           </div>
         )}
 
@@ -793,20 +927,24 @@ function StandalonePartnerPortalContent() {
             <h2 className="font-bold text-base text-slate-900">
               My Organization Team Members ({myTeam.length})
             </h2>
-            {myTeam.map((m) => (
-              <div
-                key={m.id}
-                className="p-3 rounded-xl border border-slate-200 flex items-center justify-between"
-              >
-                <div>
-                  <p className="font-bold text-slate-900">{m.name}</p>
-                  <p className="text-slate-500">
-                    {m.email} · {m.jobTitle} ({m.role})
-                  </p>
+            {myTeam.length === 0 ? (
+              <p className="text-slate-400 py-2">No team members listed yet.</p>
+            ) : (
+              myTeam.map((m) => (
+                <div
+                  key={m.id}
+                  className="p-3 rounded-xl border border-slate-200 flex items-center justify-between"
+                >
+                  <div>
+                    <p className="font-bold text-slate-900">{m.name}</p>
+                    <p className="text-slate-500">
+                      {m.email} · {m.jobTitle} ({m.role})
+                    </p>
+                  </div>
+                  <StatusBadge status={m.status} />
                 </div>
-                <StatusBadge status={m.status} />
-              </div>
-            ))}
+              ))
+            )}
           </div>
         )}
 
@@ -833,6 +971,7 @@ function StandalonePartnerPortalContent() {
                 <input
                   value={bankName}
                   onChange={(e) => setBankName(e.target.value)}
+                  placeholder="Commercial Bank"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -843,6 +982,7 @@ function StandalonePartnerPortalContent() {
                 <input
                   value={swiftCode}
                   onChange={(e) => setSwiftCode(e.target.value)}
+                  placeholder="BANKXX22"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -853,6 +993,7 @@ function StandalonePartnerPortalContent() {
                 <input
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value)}
+                  placeholder="000-000000-0"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>

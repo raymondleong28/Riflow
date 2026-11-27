@@ -6,87 +6,54 @@ import { usePrm } from "@/context/PrmContext";
 import { StatusBadge } from "@/components/SharedEngines";
 import { ArrowRight, Plus, CheckCircle2, X, ShieldCheck } from "lucide-react";
 
-const ONBOARDING_STAGES = [
-  "Kickoff Welcome Call",
-  "Book a Demo Account Training",
+const DEFAULT_STAGES = [
+  "Kickoff",
+  "Enablement",
   "Technical Certification",
   "Completed",
 ];
 
-// 6 Verified Onboarding Stage Action Types (§4.5 / D8)
-const ONBOARDING_ACTION_TYPES = [
-  {
-    type: "view_asset",
-    label: "1. View asset",
-    defaultTitle: "Review 2026 Enterprise Partner Pitch Deck",
-    requiresValidation: false,
-  },
-  {
-    type: "read_article",
-    label: "2. Read article",
-    defaultTitle: "Read 'How to Register & Protect an Enterprise Deal'",
-    requiresValidation: false,
-  },
-  {
-    type: "upload_document",
-    label: "3. Upload document",
-    defaultTitle: "Upload Counter-Signed Master Reseller Agreement (PDF)",
-    requiresValidation: true,
-  },
-  {
-    type: "provide_information",
-    label: "4. Provide information",
-    defaultTitle: "Complete Regional Territory & Technical Headcount Form",
-    requiresValidation: true,
-  },
-  {
-    type: "book_meeting",
-    label: "5. Book meeting",
-    defaultTitle: "Book Kickoff Alignment Call via Calendly / HubSpot",
-    requiresValidation: false,
-  },
-  {
-    type: "self_invoicing_opt_in",
-    label: "6. Opt-in/out from self-invoicing",
-    defaultTitle: "Confirm Automated Self-Invoicing & GST/Tax Billing Preference",
-    requiresValidation: false,
-  },
-] as const;
-
 export default function PartnerOnboardingPage() {
   const { partners, programs, manageItems, mutate, setGlobalModal, showToast } =
     usePrm();
-  const [pipeline, setPipeline] = useState("Strategic Partner");
-  const [assignedProgram, setAssignedProgram] = useState(
-    "R-Cloud Strategic Solution Partners"
+
+  const pipelineItems = manageItems.filter(
+    (m) => m.category === "onboarding_pipelines"
   );
+  const [pipeline, setPipeline] = useState("");
+  const [assignedProgram, setAssignedProgram] = useState("");
   const [visibleToMainContacts, setVisibleToMainContacts] = useState(true);
 
-  // Stage Action Builder Modal State (Fixes D8)
+  const activePipelineName =
+    pipeline || pipelineItems[0]?.name || "Default Onboarding";
+  const activePipelineItem = pipelineItems.find(
+    (p) => p.name === activePipelineName
+  );
+  let onboardingStages = DEFAULT_STAGES;
+  if (activePipelineItem?.metadataJson) {
+    try {
+      const parsed = JSON.parse(activePipelineItem.metadataJson);
+      if (Array.isArray(parsed.stages) && parsed.stages.length > 0) {
+        onboardingStages = parsed.stages;
+      }
+    } catch {
+      onboardingStages = DEFAULT_STAGES;
+    }
+  }
+
   const [actionModalOpen, setActionModalOpen] = useState(false);
-  const [actionStage, setActionStage] = useState("Kickoff Welcome Call");
+  const [actionStage, setActionStage] = useState(onboardingStages[0] || "Kickoff");
   const [actionType, setActionType] = useState("view_asset");
-  const [actionTitle, setActionTitle] = useState(
-    "Review 2026 Enterprise Partner Pitch Deck"
-  );
-  const [actionDesc, setActionDesc] = useState(
-    "Required onboarding step before advancing to next stage."
-  );
+  const [actionTitle, setActionTitle] = useState("");
+  const [actionDesc, setActionDesc] = useState("");
   const [requireValidation, setRequireValidation] = useState(false);
   const [selectedAssetId, setSelectedAssetId] = useState("");
   const [selectedArticleId, setSelectedArticleId] = useState("");
-  const [documentTitle, setDocumentTitle] = useState(
-    "Signed Partner Compliance Certificate"
-  );
-  const [dynamicFields, setDynamicFields] = useState<string[]>([
-    "Number of Certified Engineers",
-    "Primary APAC Territory",
-  ]);
+  const [documentTitle, setDocumentTitle] = useState("");
+  const [dynamicFields, setDynamicFields] = useState<string[]>([]);
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [calendarType, setCalendarType] = useState("Calendly");
-  const [calendarLink, setCalendarLink] = useState(
-    "https://calendly.com/r-cloud-alliances/kickoff"
-  );
+  const [calendarLink, setCalendarLink] = useState("");
 
   const assets = manageItems.filter((m) => m.category === "assets");
   const articles = manageItems.filter((m) => m.category === "help_articles");
@@ -121,7 +88,7 @@ export default function PartnerOnboardingPage() {
         }`,
         status: requireValidation ? "Pending Validation" : "Active",
         metadata: {
-          pipeline,
+          pipeline: activePipelineName,
           stage: actionStage,
           actionType,
           description: actionDesc,
@@ -136,43 +103,53 @@ export default function PartnerOnboardingPage() {
       },
       `Added "${actionType}" action to stage "${actionStage}"!`
     );
+    setActionTitle("");
+    setActionDesc("");
     setActionModalOpen(false);
   };
 
   return (
     <div className="max-w-[1440px] mx-auto px-6 py-5 space-y-5">
-      {/* Pipeline Header with Explicit Pipeline-to-Program Binding (§4.5) */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-bold text-slate-900">
             Partners onboarding
           </h1>
           <select
-            value={pipeline}
+            value={activePipelineName}
             onChange={(e) => setPipeline(e.target.value)}
             className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold text-blue-700 bg-blue-50"
           >
-            <option value="Strategic Partner">
-              Pipeline: Strategic Partner
-            </option>
-            <option value="Fast-Track Referral">
-              Pipeline: Fast-Track Referral
-            </option>
+            {pipelineItems.length > 0 ? (
+              pipelineItems.map((pl) => (
+                <option key={pl.id} value={pl.name}>
+                  Pipeline: {pl.name}
+                </option>
+              ))
+            ) : (
+              <option value="Default Onboarding">
+                Pipeline: Default Onboarding
+              </option>
+            )}
           </select>
 
           <select
-            value={assignedProgram}
+            value={assignedProgram || programs[0]?.name || ""}
             onChange={(e) => {
               setAssignedProgram(e.target.value);
               showToast(`Pipeline bound to program "${e.target.value}"`);
             }}
             className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 bg-white"
           >
-            {programs.map((prog) => (
-              <option key={prog.id} value={prog.name}>
-                Assigned Program: {prog.name}
-              </option>
-            ))}
+            {programs.length === 0 ? (
+              <option value="">No programs yet</option>
+            ) : (
+              programs.map((prog) => (
+                <option key={prog.id} value={prog.name}>
+                  Assigned Program: {prog.name}
+                </option>
+              ))
+            )}
           </select>
 
           <label className="flex items-center space-x-1.5 text-xs text-slate-700">
@@ -204,70 +181,21 @@ export default function PartnerOnboardingPage() {
         </div>
       </div>
 
-      {/* Onboarding Kanban Board — Actions Attached Per Individual Stage */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {ONBOARDING_STAGES.map((stage, idx) => {
+        {onboardingStages.map((stage, idx) => {
           const items = partners.filter((p) => p.onboardingStage === stage);
-          const nextStage = ONBOARDING_STAGES[idx + 1];
+          const nextStage = onboardingStages[idx + 1];
           const actionsForThisStage = stageActions.filter((sa) => {
             try {
-              const meta = sa.metadataJson ? JSON.parse(sa.metadataJson) : sa.metadata;
+              const meta = sa.metadataJson
+                ? JSON.parse(sa.metadataJson)
+                : sa.metadata;
               if (meta?.stage) return meta.stage === stage;
-            } catch {}
+            } catch {
+              // ignore
+            }
             return (sa.subtitle || "").includes(`Stage: ${stage}`);
           });
-
-          // Default stage-level action examples per stage so each stage shows its attached actions
-          const defaultStageActionMap: Record<
-            string,
-            Array<{ type: string; label: string; title: string; requiresValidation: boolean }>
-          > = {
-            "Kickoff Welcome Call": [
-              {
-                type: "book_meeting",
-                label: "Book meeting",
-                title: "Book Kickoff Alignment Call via Calendly / HubSpot",
-                requiresValidation: false,
-              },
-              {
-                type: "view_asset",
-                label: "View asset",
-                title: "Review 2026 Enterprise Partner Pitch Deck",
-                requiresValidation: false,
-              },
-            ],
-            "Book a Demo Account Training": [
-              {
-                type: "read_article",
-                label: "Read article",
-                title: "Read 'How to Register & Protect an Enterprise Deal'",
-                requiresValidation: false,
-              },
-              {
-                type: "provide_information",
-                label: "Provide information",
-                title: "Complete Regional Territory & Technical Headcount Form",
-                requiresValidation: true,
-              },
-            ],
-            "Technical Certification": [
-              {
-                type: "upload_document",
-                label: "Upload document",
-                title: "Upload Counter-Signed Master Reseller Agreement (PDF)",
-                requiresValidation: true,
-              },
-            ],
-            Completed: [
-              {
-                type: "self_invoicing_opt_in",
-                label: "Opt-in/out from self-invoicing",
-                title: "Confirm Automated Self-Invoicing & GST/Tax Billing Preference",
-                requiresValidation: false,
-              },
-            ],
-          };
-          const builtInStageActions = defaultStageActionMap[stage] || [];
 
           return (
             <div
@@ -284,11 +212,10 @@ export default function PartnerOnboardingPage() {
                   </span>
                 </div>
 
-                {/* Stage-Scoped Actions Panel */}
                 <div className="bg-white rounded-xl border border-blue-200 p-3 space-y-2 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-[11px] text-blue-900 uppercase tracking-wider">
-                      Stage Actions ({builtInStageActions.length + actionsForThisStage.length})
+                      Stage Actions ({actionsForThisStage.length})
                     </span>
                     <button
                       type="button"
@@ -303,69 +230,48 @@ export default function PartnerOnboardingPage() {
                     </button>
                   </div>
 
-                  <div className="space-y-1.5">
-                    {builtInStageActions.map((act) => (
-                      <div
-                        key={act.type + act.title}
-                        onClick={() => {
-                          setActionStage(stage);
-                          setActionType(act.type);
-                          setActionTitle(act.title);
-                          setRequireValidation(act.requiresValidation);
-                          setActionModalOpen(true);
-                        }}
-                        className="p-2 rounded-lg border border-slate-200 hover:border-blue-400 bg-slate-50 cursor-pointer space-y-0.5"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold text-blue-700 uppercase">
-                            {act.label}
-                          </span>
-                          {act.requiresValidation && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold">
-                              Requires Validation
+                  {actionsForThisStage.length === 0 ? (
+                    <p className="text-[11px] text-slate-400">
+                      No actions configured for this stage yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {actionsForThisStage.map((sa) => (
+                        <div
+                          key={sa.id}
+                          className="p-2 rounded-lg bg-blue-50/60 border border-blue-200 space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-900 text-[11px]">
+                              {sa.name}
                             </span>
+                            <StatusBadge status={sa.status} />
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            {sa.subtitle}
+                          </p>
+                          {sa.status === "Pending Validation" && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                mutate(
+                                  "TOGGLE_MANAGE_ITEM_STATUS",
+                                  { id: sa.id, status: "Validated" },
+                                  `Admin validated onboarding action "${sa.name}"!`
+                                )
+                              }
+                              className="w-full mt-1 px-2 py-1 rounded bg-emerald-600 text-white font-semibold text-[10px] flex items-center justify-center space-x-1"
+                            >
+                              <ShieldCheck className="w-3 h-3" />
+                              <span>Approve Validation</span>
+                            </button>
                           )}
                         </div>
-                        <p className="font-medium text-slate-800 text-[11px]">
-                          {act.title}
-                        </p>
-                      </div>
-                    ))}
-
-                    {actionsForThisStage.map((sa) => (
-                      <div
-                        key={sa.id}
-                        className="p-2 rounded-lg bg-blue-50/60 border border-blue-200 space-y-1"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-slate-900 text-[11px]">
-                            {sa.name}
-                          </span>
-                          <StatusBadge status={sa.status} />
-                        </div>
-                        <p className="text-[10px] text-slate-500">{sa.subtitle}</p>
-                        {sa.status === "Pending Validation" && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              mutate(
-                                "TOGGLE_MANAGE_ITEM_STATUS",
-                                { id: sa.id, status: "Validated" },
-                                `Admin validated onboarding action "${sa.name}"!`
-                              )
-                            }
-                            className="w-full mt-1 px-2 py-1 rounded bg-emerald-600 text-white font-semibold text-[10px] flex items-center justify-center space-x-1"
-                          >
-                            <ShieldCheck className="w-3 h-3" />
-                            <span>Approve Validation</span>
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
-                {/* Partner Cards in this Stage */}
                 <div className="space-y-2.5">
                   {items.map((p) => (
                     <div
@@ -379,12 +285,12 @@ export default function PartnerOnboardingPage() {
                         {p.name}
                       </Link>
                       <p className="text-slate-500">
-                        {p.programName} · {p.qualifyingLevel}
+                        {p.programName || "—"} · {p.qualifyingLevel || "Standard"}
                       </p>
                       <div className="text-[11px] text-emerald-700 flex items-center space-x-1">
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         <span>
-                          {builtInStageActions.length + actionsForThisStage.length} stage actions assigned
+                          {actionsForThisStage.length} stage actions assigned
                         </span>
                       </div>
                       <div className="flex items-center justify-between pt-2 border-t border-slate-100">
@@ -408,7 +314,6 @@ export default function PartnerOnboardingPage() {
         })}
       </div>
 
-      {/* 6-ACTION-TYPE BUILDER MODAL (Fixes D8) */}
       {actionModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
           <form
@@ -438,7 +343,7 @@ export default function PartnerOnboardingPage() {
                     onChange={(e) => setActionStage(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
-                    {ONBOARDING_STAGES.map((s) => (
+                    {onboardingStages.map((s) => (
                       <option key={s} value={s}>
                         {s}
                       </option>
@@ -447,7 +352,7 @@ export default function PartnerOnboardingPage() {
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
-                    Action Type (6 Verified Types)
+                    Action Type (6 Types)
                   </label>
                   <select
                     value={actionType}
@@ -476,6 +381,7 @@ export default function PartnerOnboardingPage() {
                   required
                   value={actionTitle}
                   onChange={(e) => setActionTitle(e.target.value)}
+                  placeholder="Action title"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -488,11 +394,11 @@ export default function PartnerOnboardingPage() {
                   rows={2}
                   value={actionDesc}
                   onChange={(e) => setActionDesc(e.target.value)}
+                  placeholder="Instructions for the partner"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
 
-              {/* Action Type 1: View Asset */}
               {actionType === "view_asset" && (
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
@@ -503,6 +409,7 @@ export default function PartnerOnboardingPage() {
                     onChange={(e) => setSelectedAssetId(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
+                    <option value="">Select asset...</option>
                     {assets.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.name}
@@ -512,7 +419,6 @@ export default function PartnerOnboardingPage() {
                 </div>
               )}
 
-              {/* Action Type 2: Read Article */}
               {actionType === "read_article" && (
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
@@ -523,6 +429,7 @@ export default function PartnerOnboardingPage() {
                     onChange={(e) => setSelectedArticleId(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
+                    <option value="">Select article...</option>
                     {articles.map((art) => (
                       <option key={art.id} value={art.id}>
                         {art.name}
@@ -532,7 +439,6 @@ export default function PartnerOnboardingPage() {
                 </div>
               )}
 
-              {/* Action Type 3: Upload Document */}
               {actionType === "upload_document" && (
                 <div className="space-y-2">
                   <div>
@@ -542,6 +448,7 @@ export default function PartnerOnboardingPage() {
                     <input
                       value={documentTitle}
                       onChange={(e) => setDocumentTitle(e.target.value)}
+                      placeholder="Signed Partner Agreement"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                     />
                   </div>
@@ -558,7 +465,6 @@ export default function PartnerOnboardingPage() {
                 </div>
               )}
 
-              {/* Action Type 4: Provide Information (Dynamic Form Builder) */}
               {actionType === "provide_information" && (
                 <div className="space-y-2">
                   <label className="block font-semibold text-slate-700">
@@ -611,7 +517,6 @@ export default function PartnerOnboardingPage() {
                 </div>
               )}
 
-              {/* Action Type 5: Book Meeting */}
               {actionType === "book_meeting" && (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -635,19 +540,18 @@ export default function PartnerOnboardingPage() {
                     <input
                       value={calendarLink}
                       onChange={(e) => setCalendarLink(e.target.value)}
+                      placeholder="https://..."
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                     />
                   </div>
                 </div>
               )}
 
-              {/* Action Type 6: Opt-in/out from self-invoicing */}
               {actionType === "self_invoicing_opt_in" && (
                 <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-900">
                   Presents an Opt-In / Opt-Out toggle to the Partner Main
-                  Contact during onboarding and sets the partner&apos;s{" "}
-                  <strong>self-invoicing</strong> flag for automated payout
-                  invoice generation.
+                  Contact during onboarding for automated payout invoice
+                  generation.
                 </div>
               )}
             </div>

@@ -26,7 +26,7 @@ export interface ManageFormState {
   webhookUrl: string;
   syncDirection: string;
   sku: string;
-  priceSgd: string;
+  priceBase: string;
   billingCadence: string;
   coworkerEmail: string;
   coworkerTitle: string;
@@ -61,6 +61,7 @@ interface ManageModalsProps {
   programs: any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   partners: any[];
+  baseCurrency?: string;
   awardModalCertId: string | null;
   setAwardModalCertId: (id: string | null) => void;
   selectedPartnerToAward: string;
@@ -91,6 +92,7 @@ export function ManageModals({
   uploading,
   programs,
   partners,
+  baseCurrency = "",
   awardModalCertId,
   setAwardModalCertId,
   selectedPartnerToAward,
@@ -262,6 +264,7 @@ export function ManageModals({
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">
                       Email Body (Supports merge tags:{" "}
+                      <code>{"{{workspace.name}}"}</code>,{" "}
                       <code>{"{{partner.name}}"}</code>,{" "}
                       <code>{"{{contact.first_name}}"}</code>,{" "}
                       <code>{"{{deal.name}}"}</code>)
@@ -396,13 +399,13 @@ export function ManageModals({
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">
-                      Unit Price (SGD)
+                      Unit Price{baseCurrency ? ` (${baseCurrency})` : ""}
                     </label>
                     <input
                       type="number"
-                      value={form.priceSgd}
+                      value={form.priceBase}
                       onChange={(e) =>
-                        setForm({ ...form, priceSgd: e.target.value })
+                        setForm({ ...form, priceBase: e.target.value })
                       }
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                     />
@@ -523,7 +526,7 @@ export function ManageModals({
                       >
                         <option value="status">status</option>
                         <option value="stage">stage</option>
-                        <option value="amountSgd">amountSgd</option>
+                        <option value="amountBase">amountBase</option>
                         <option value="qualifyingLevel">qualifyingLevel</option>
                         <option value="programName">programName</option>
                       </select>

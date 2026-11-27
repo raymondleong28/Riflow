@@ -4,26 +4,41 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { EntityListToolbar, StatusBadge } from "@/components/SharedEngines";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 import { X, RotateCcw } from "lucide-react";
 
 export default function RewardsListPage() {
-  const { rewards, partners, mutate } = usePrm();
+  const { rewards, partners, settings, mutate } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
 
-  // Refuse with required reason modal (§4.1.3)
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
+
   const [refuseRewardId, setRefuseRewardId] = useState<string | null>(null);
   const [refuseReason, setRefuseReason] = useState("");
 
   const [form, setForm] = useState({
-    partnerName: "Apex Cloud Solutions Pte Ltd",
+    partnerName: "",
     type: "Cash",
-    amount: "1200",
-    currency: "SGD",
-    comment: "Q4 Co-Selling Accelerator Bonus",
+    amount: "",
+    currency: "",
+    comment: "",
     oneTimeCommission: "Yes",
   });
+
+  const openModal = () => {
+    setForm({
+      partnerName: partners[0]?.name || "",
+      type: "Cash",
+      amount: "",
+      currency: baseCurrency,
+      comment: "",
+      oneTimeCommission: "Yes",
+    });
+    setModalOpen(true);
+  };
 
   const filtered = rewards.filter((r) => {
     if (
@@ -47,7 +62,10 @@ export default function RewardsListPage() {
     e.preventDefault();
     await mutate(
       "CREATE_REWARD",
-      form,
+      {
+        ...form,
+        currency: form.currency || baseCurrency,
+      },
       `Commission reward created for ${form.partnerName}!`
     );
     setModalOpen(false);
@@ -64,7 +82,7 @@ export default function RewardsListPage() {
         search={search}
         onSearchChange={setSearch}
         primaryActionLabel="Create reward"
-        onPrimaryAction={() => setModalOpen(true)}
+        onPrimaryAction={openModal}
       />
 
       <div className="max-w-[1440px] mx-auto px-6 py-5">
@@ -76,7 +94,7 @@ export default function RewardsListPage() {
                 <th className="py-3 px-3 font-semibold">Recipient</th>
                 <th className="py-3 px-3 font-semibold">Type</th>
                 <th className="py-3 px-3 font-semibold text-right">
-                  Amount (SGD)
+                  Amount ({baseCurrency})
                 </th>
                 <th className="py-3 px-3 font-semibold text-right">Amount</th>
                 <th className="py-3 px-3 font-semibold">From Activity</th>
@@ -102,10 +120,13 @@ export default function RewardsListPage() {
                   <td className="py-3 px-3 text-slate-600">{r.type}</td>
                   <td
                     className={`py-3 px-3 text-right font-bold ${
-                      r.amountSgd < 0 ? "text-red-600" : "text-slate-900"
+                      (r.amountBase ?? r.amount ?? 0) < 0
+                        ? "text-red-600"
+                        : "text-slate-900"
                     }`}
                   >
-                    SGD {r.amountSgd.toLocaleString()}
+                    {baseCurrency}{" "}
+                    {(r.amountBase ?? r.amount ?? 0).toLocaleString()}
                   </td>
                   <td className="py-3 px-3 text-right text-slate-600">
                     {r.currency} {r.amount.toLocaleString()}
@@ -147,7 +168,7 @@ export default function RewardsListPage() {
                       </>
                     )}
                     {(r.status === "Accepted" || r.status === "Paid") &&
-                      r.amountSgd > 0 && (
+                      (r.amountBase ?? r.amount ?? 0) > 0 && (
                         <button
                           onClick={() =>
                             mutate(
@@ -192,12 +213,14 @@ export default function RewardsListPage() {
                   Partner *
                 </label>
                 <select
+                  required
                   value={form.partnerName}
                   onChange={(e) =>
                     setForm({ ...form, partnerName: e.target.value })
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
+                  <option value="">Select partner...</option>
                   {partners.map((p) => (
                     <option key={p.id} value={p.name}>
                       {p.name}
@@ -228,10 +251,13 @@ export default function RewardsListPage() {
                   <input
                     required
                     type="number"
+                    min="0.01"
+                    step="any"
                     value={form.amount}
                     onChange={(e) =>
                       setForm({ ...form, amount: e.target.value })
                     }
+                    placeholder="Enter amount"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -240,16 +266,17 @@ export default function RewardsListPage() {
                     Currency
                   </label>
                   <select
-                    value={form.currency}
+                    value={form.currency || baseCurrency}
                     onChange={(e) =>
                       setForm({ ...form, currency: e.target.value })
                     }
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
-                    <option>SGD</option>
-                    <option>USD</option>
-                    <option>EUR</option>
-                    <option>MYR</option>
+                    {SUPPORTED_CURRENCIES.map((code) => (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -263,6 +290,7 @@ export default function RewardsListPage() {
                   onChange={(e) =>
                     setForm({ ...form, comment: e.target.value })
                   }
+                  placeholder="Optional reward note..."
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -286,7 +314,7 @@ export default function RewardsListPage() {
         </div>
       )}
 
-      {/* Refuse Reward with Reason Modal (§4.1.3) */}
+      {/* Refuse Reward with Reason Modal */}
       {refuseRewardId && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
           <form
@@ -326,7 +354,7 @@ export default function RewardsListPage() {
                 rows={3}
                 value={refuseReason}
                 onChange={(e) => setRefuseReason(e.target.value)}
-                placeholder="e.g. Duplicate registration or excluded hardware line item."
+                placeholder="e.g. Duplicate registration or excluded line item."
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg"
               />
             </div>

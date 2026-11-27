@@ -12,10 +12,12 @@ import {
   serializeSettingsForPartner,
 } from "../src/lib/partnerSerializer";
 import {
-  EBER_COMMISSION_FIXTURE_RULES,
+  DEFAULT_COMMISSION_TEMPLATES,
   evaluateRuleForInvoice,
   convertWithDatedFx,
   computePartnerKpis,
+  computeLast12Months,
+  currentMonthKeyInTimezone,
   canPartnerAccessAsset,
   computeAccountOverlaps,
   generateRandomLeadFormToken,
@@ -53,8 +55,10 @@ import {
   clearInMemoryRateLimitCache,
 } from "../src/lib/authSession";
 import { seedDatabase } from "../prisma/seed";
-import { POST as authPost } from "../src/app/api/auth/route";
+import { GET as authGet, POST as authPost } from "../src/app/api/auth/route";
 import { GET as setupGet, POST as setupPost } from "../src/app/api/setup/route";
+import { POST as schedulerPost } from "../src/app/api/scheduler/route";
+import { executeResourceMutation } from "../src/lib/resourceMutations";
 import {
   matchAccountListsByDomainAndName,
   handleCsvImportMutation,
@@ -68,6 +72,34 @@ async function runFixtures() {
   if (existingPartnersCount === 0) {
     await seedDatabase({ forceReset: true });
   } else {
+    // Clean up any leftover temporary fixture records from an interrupted run
+    await prisma.task.deleteMany({
+      where: { associationName: "Unassigned Prospect Sdn Bhd" },
+    });
+    await prisma.manageItem.deleteMany({
+      where: {
+        OR: [
+          {
+            category: "invitation_nurture",
+            name: "Invitation Nurture: Unassigned Prospect Sdn Bhd",
+          },
+          {
+            category: "email_outbox",
+            subtitle: { contains: "hello@unassigned.example.com" },
+          },
+        ],
+      },
+    });
+    await prisma.partner.deleteMany({
+      where: { name: "Unassigned Prospect Sdn Bhd" },
+    });
+    await prisma.deal.deleteMany({
+      where: { company: "Kuala Lumpur Cloud Sdn Bhd" },
+    });
+    await prisma.lead.deleteMany({
+      where: { email: "farah@klcloud.example.com" },
+    });
+
     // Backfill random lead-form tokens if any pre-migration partner row lacks one
     const missingTokenPartners = await prisma.partner.findMany({
       where: { leadFormTokenHash: null },
@@ -103,7 +135,7 @@ async function runFixtures() {
   // Fixture 1: Baseline 6 seed transactions total = SGD 82,100 (8,210,000 minor units / cents)
   const seedTxIds = ["tx-1", "tx-2", "tx-3", "tx-4", "tx-5", "tx-6"];
   const seedTxs = transactions.filter((t) => seedTxIds.includes(t.id));
-  const txSumMinor = seedTxs.reduce((acc, t) => acc + t.amountSgd, 0);
+  const txSumMinor = seedTxs.reduce((acc, t) => acc + t.amountBase, 0);
   assert.equal(
     txSumMinor,
     toMinorUnits(82100),
@@ -138,7 +170,7 @@ async function runFixtures() {
   );
 
   // Fixture 3a: Biz Partner (one-off at month 4)
-  const bizOneOff = EBER_COMMISSION_FIXTURE_RULES.biz_partner_one_off;
+  const bizOneOff = DEFAULT_COMMISSION_TEMPLATES.biz_partner_one_off;
   const seenKeys = new Set<string>();
   for (let m = 1; m <= 6; m++) {
     const res = evaluateRuleForInvoice(
@@ -153,11 +185,13 @@ async function runFixtures() {
         currency: "SGD",
         paidDate: "2026-11-24",
       },
-      seenKeys
+      seenKeys,
+      undefined,
+      "SGD"
     );
     if (m === 4) {
       assert.ok(res, "Month 4 should generate one-off reward");
-      assert.equal(res.amountSgd, 1200);
+      assert.equal(res.amountBase, 1200);
       seenKeys.add(res.idempotencyKey);
     } else {
       assert.equal(res, null, `Month ${m} must earn 0 for Biz Partner one-off`);
@@ -176,7 +210,9 @@ async function runFixtures() {
       currency: "SGD",
       paidDate: "2026-11-24",
     },
-    seenKeys
+    seenKeys,
+    undefined,
+    "SGD"
   );
   assert.equal(dupM4, null, "Re-processing same Month-4 invoice must be idempotent");
   console.log(
@@ -184,7 +220,7 @@ async function runFixtures() {
   );
 
   // Fixture 3b: Biz Partner Premium (20% M4-15, 10% M16-27)
-  const bizPremium = EBER_COMMISSION_FIXTURE_RULES.biz_partner_premium_recurring;
+  const bizPremium = DEFAULT_COMMISSION_TEMPLATES.biz_partner_premium_recurring;
   for (const [m, expected] of [
     [1, null],
     [3, null],
@@ -194,70 +230,94 @@ async function runFixtures() {
     [27, 100],
     [28, null],
   ] as const) {
-    const res = evaluateRuleForInvoice(bizPremium, {
-      invoiceId: `PREM-M${m}`,
-      merchantName: "Merchant Beta",
-      partnerName: "Apex Cloud Solutions Pte Ltd",
-      billingMonth: m,
-      invoiceAmount: 1000,
-      currency: "SGD",
-      paidDate: "2026-11-24",
-    });
+    const res = evaluateRuleForInvoice(
+      bizPremium,
+      {
+        invoiceId: `PREM-M${m}`,
+        merchantName: "Merchant Beta",
+        partnerName: "Apex Cloud Solutions Pte Ltd",
+        billingMonth: m,
+        invoiceAmount: 1000,
+        currency: "SGD",
+        paidDate: "2026-11-24",
+      },
+      undefined,
+      undefined,
+      "SGD"
+    );
     assert.equal(
-      res ? res.amountSgd : null,
+      res ? res.amountBase : null,
       expected,
-      `Month ${m} expected ${expected}, got ${res?.amountSgd}`
+      `Month ${m} expected ${expected}, got ${res?.amountBase}`
     );
   }
   // Churned client stops earning immediately
-  const churnedRes = evaluateRuleForInvoice(bizPremium, {
-    invoiceId: "PREM-CHURN",
-    merchantName: "Merchant Beta",
-    partnerName: "Apex Cloud Solutions Pte Ltd",
-    billingMonth: 8,
-    invoiceAmount: 1000,
-    currency: "SGD",
-    paidDate: "2026-11-24",
-    isStillPartnerClient: false,
-  });
+  const churnedRes = evaluateRuleForInvoice(
+    bizPremium,
+    {
+      invoiceId: "PREM-CHURN",
+      merchantName: "Merchant Beta",
+      partnerName: "Apex Cloud Solutions Pte Ltd",
+      billingMonth: 8,
+      invoiceAmount: 1000,
+      currency: "SGD",
+      paidDate: "2026-11-24",
+      isStillPartnerClient: false,
+    },
+    undefined,
+    undefined,
+    "SGD"
+  );
   assert.equal(churnedRes, null, "No reward if merchant is no longer partner client");
   console.log(
     "✓ Fixture 3b passed: Biz Partner Premium recurring (20% M4-15, 10% M16-27, stops on churn)"
   );
 
   // Fixture 3c: Referral entry (no commission unless agreed in writing before order acceptance)
-  const referralRule = EBER_COMMISSION_FIXTURE_RULES.referral_entry;
-  const noAgreement = evaluateRuleForInvoice(referralRule, {
-    invoiceId: "REF-1",
-    merchantName: "Merchant Gamma",
-    partnerName: "BluePeak Commerce Advisory",
-    billingMonth: 1,
-    invoiceAmount: 5000,
-    currency: "SGD",
-    paidDate: "2026-11-24",
-  });
+  const referralRule = DEFAULT_COMMISSION_TEMPLATES.referral_entry;
+  const noAgreement = evaluateRuleForInvoice(
+    referralRule,
+    {
+      invoiceId: "REF-1",
+      merchantName: "Merchant Gamma",
+      partnerName: "BluePeak Commerce Advisory",
+      billingMonth: 1,
+      invoiceAmount: 5000,
+      currency: "SGD",
+      paidDate: "2026-11-24",
+    },
+    undefined,
+    undefined,
+    "SGD"
+  );
   assert.equal(noAgreement, null, "Referral entry without agreement must earn 0");
 
-  const validAgreement = evaluateRuleForInvoice(referralRule, {
-    invoiceId: "REF-2",
-    merchantName: "Merchant Gamma",
-    partnerName: "BluePeak Commerce Advisory",
-    billingMonth: 1,
-    invoiceAmount: 5000,
-    currency: "SGD",
-    paidDate: "2026-11-24",
-    agreedOverrideRatePct: 12,
-    agreedBeforeAcceptanceTimestamp: "2026-11-01T10:00:00Z",
-    orderAcceptedTimestamp: "2026-11-02T10:00:00Z",
-  });
-  assert.equal(validAgreement?.amountSgd, 600, "12% override on 5000 should equal 600");
+  const validAgreement = evaluateRuleForInvoice(
+    referralRule,
+    {
+      invoiceId: "REF-2",
+      merchantName: "Merchant Gamma",
+      partnerName: "BluePeak Commerce Advisory",
+      billingMonth: 1,
+      invoiceAmount: 5000,
+      currency: "SGD",
+      paidDate: "2026-11-24",
+      agreedOverrideRatePct: 12,
+      agreedBeforeAcceptanceTimestamp: "2026-11-01T10:00:00Z",
+      orderAcceptedTimestamp: "2026-11-02T10:00:00Z",
+    },
+    undefined,
+    undefined,
+    "SGD"
+  );
+  assert.equal(validAgreement?.amountBase, 600, "12% override on 5000 should equal 600");
   console.log(
     "✓ Fixture 3c passed: Referral entry pre-acceptance written agreement check"
   );
 
   // Fixture 3d: Dated FX check
-  const fxUsd = convertWithDatedFx(1000, "USD");
-  assert.equal(fxUsd.amountSgd, 1350);
+  const fxUsd = convertWithDatedFx(1000, "USD", "SGD");
+  assert.equal(fxUsd.amountBase, 1350);
   assert.equal(fxUsd.fxRate, 1.35);
   assert.ok(fxUsd.fxRateDate, "FX conversion must carry rateDate");
   console.log("✓ Fixture 3d passed: Multi-currency conversion carries dated FX rate");
@@ -321,11 +381,11 @@ async function runFixtures() {
     (r) =>
       r.partnerName.includes("Apex") &&
       (r.fromActivity.includes("INV-2026-901") ||
-        r.amountSgd === toMinorUnits(7125) ||
-        r.amountSgd === toMinorUnits(1425))
+        r.amountBase === toMinorUnits(7125) ||
+        r.amountBase === toMinorUnits(1425))
   );
   const amountsMinor = apexTx1Rewards
-    .map((r) => r.amountSgd)
+    .map((r) => r.amountBase)
     .sort((a, b) => b - a);
   assert.deepEqual(
     amountsMinor,
@@ -470,7 +530,7 @@ async function runFixtures() {
       name: "Quarterly Biz Partner Program",
       autoEmailsJson: JSON.stringify({
         payoutCadence: "quarterly",
-        payoutThresholdSgd: 250,
+        payoutThresholdBase: 250,
       }),
     },
     {
@@ -478,7 +538,7 @@ async function runFixtures() {
       name: "Monthly Reseller Program",
       autoEmailsJson: JSON.stringify({
         payoutCadence: "monthly",
-        payoutThresholdSgd: 250,
+        payoutThresholdBase: 250,
       }),
     },
   ];
@@ -489,7 +549,7 @@ async function runFixtures() {
       partnerName: "Apex Cloud Solutions Pte Ltd",
       amount: 1000,
       currency: "SGD",
-      amountSgd: 1000,
+      amountBase: 1000,
       status: "Accepted",
       periodDate: "10/2026",
     },
@@ -498,7 +558,7 @@ async function runFixtures() {
       partnerName: "Apex Cloud Solutions Pte Ltd",
       amount: 1500,
       currency: "SGD",
-      amountSgd: 1500,
+      amountBase: 1500,
       status: "Accepted",
       periodDate: "11/2026",
     },
@@ -507,7 +567,7 @@ async function runFixtures() {
       partnerName: "Apex Cloud Solutions Pte Ltd",
       amount: 2000,
       currency: "SGD",
-      amountSgd: 2000,
+      amountBase: 2000,
       status: "Accepted",
       periodDate: "12/2026",
     },
@@ -517,7 +577,7 @@ async function runFixtures() {
       partnerName: "NovaBridge Digital Systems",
       amount: 800,
       currency: "SGD",
-      amountSgd: 800,
+      amountBase: 800,
       status: "Accepted",
       periodDate: "10/2026",
     },
@@ -526,7 +586,7 @@ async function runFixtures() {
       partnerName: "NovaBridge Digital Systems",
       amount: 900,
       currency: "SGD",
-      amountSgd: 900,
+      amountBase: 900,
       status: "Accepted",
       periodDate: "11/2026",
     },
@@ -535,7 +595,7 @@ async function runFixtures() {
     sampleRewards,
     [samplePartnerQuarterly, samplePartnerMonthly],
     samplePrograms,
-    { autoPayoutSchedule: "monthly", autoPayoutThresholdSgd: 250 }
+    { autoPayoutSchedule: "monthly", autoPayoutThresholdBase: 250 }
   );
   const apexQuarterlyBatches = scheduledBatches.filter(
     (b) => b.partnerName === "Apex Cloud Solutions Pte Ltd"
@@ -549,7 +609,7 @@ async function runFixtures() {
     "Quarterly program must bundle Q4 rewards into exactly 1 payout per partner per quarter"
   );
   assert.equal(apexQuarterlyBatches[0].periodKey, "2026-Q4");
-  assert.equal(apexQuarterlyBatches[0].amountSgd, 4500);
+  assert.equal(apexQuarterlyBatches[0].amountBase, 4500);
   assert.equal(apexQuarterlyBatches[0].rewardsCount, 3);
   assert.equal(
     novaMonthlyBatches.length,
@@ -935,6 +995,7 @@ async function runFixtures() {
     [
       "accountName",
       "logo",
+      "logoText",
       "mainCurrency",
       "payoutProviders",
       "portalDomain",
@@ -957,7 +1018,7 @@ async function runFixtures() {
     "dealConflictDetection",
     "dealExpirationDays",
     "autoPayoutSchedule",
-    "autoPayoutThresholdSgd",
+    "autoPayoutThresholdBase",
   ]) {
     assert.equal(
       partnerSettingsStr.includes(forbiddenKey),
@@ -1229,11 +1290,11 @@ async function runFixtures() {
       pay.rewards.length > 0,
       `Payout ${pay.payoutNumber} must have >0 linked rewards`
     );
-    const linkedSum = pay.rewards.reduce((s, r) => s + r.amountSgd, 0);
+    const linkedSum = pay.rewards.reduce((s, r) => s + r.amountBase, 0);
     assert.equal(
-      pay.amountSgd,
+      pay.amountBase,
       linkedSum,
-      `Payout ${pay.payoutNumber} amountSgd (${pay.amountSgd}) must equal sum of linked rewards (${linkedSum})`
+      `Payout ${pay.payoutNumber} amountBase (${pay.amountBase}) must equal sum of linked rewards (${linkedSum})`
     );
   }
 
@@ -1265,7 +1326,8 @@ async function runFixtures() {
   };
   const csvDryRunRes = await handleCsvImportMutation(mockAdminSession, {
     objectType: "partners",
-    csvText: "name,country\nValid Imported Partner,Singapore\n,MissingNameRow",
+    csvText:
+      "name,country,programId\nValid Imported Partner,Singapore,prog-strategic\n,MissingNameRow,prog-strategic",
     dryRun: true,
   });
   const csvDryRunJson = await csvDryRunRes.json();
@@ -1310,14 +1372,14 @@ async function runFixtures() {
     "Selecting SSO_DRIVER=saml must fail closed until implemented (F5)"
   );
 
-  // F6: Verify zero Float money columns exist in PostgreSQL information_schema
+  // F6 & §3.5.3: Verify zero Float money columns AND zero *Sgd columns exist in PostgreSQL information_schema
   const floatMoneyCols = await prisma.$queryRawUnsafe<
     Array<{ table_name: string; column_name: string; data_type: string }>
   >(`
     SELECT table_name, column_name, data_type
     FROM information_schema.columns
     WHERE table_schema = 'public'
-      AND column_name IN ('amount', 'amountSgd', 'revenuesSgd', 'targetRevSgd', 'pendingRewardsAll', 'sourcedRevenue365d', 'influencedRev365d')
+      AND column_name IN ('amount', 'amountBase', 'revenuesBase', 'targetRevBase', 'pendingRewardsAll', 'sourcedRevenue365d', 'influencedRev365d')
       AND data_type != 'integer'
   `);
   assert.equal(
@@ -1325,6 +1387,21 @@ async function runFixtures() {
     0,
     `Expected 0 non-integer money columns in PostgreSQL, found ${JSON.stringify(
       floatMoneyCols
+    )}`
+  );
+  const legacySgdCols = await prisma.$queryRawUnsafe<
+    Array<{ table_name: string; column_name: string }>
+  >(`
+    SELECT table_name, column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND column_name IN ('amountSgd', 'revenuesSgd', 'targetRevSgd')
+  `);
+  assert.equal(
+    legacySgdCols.length,
+    0,
+    `Expected 0 legacy *Sgd columns in PostgreSQL, found ${JSON.stringify(
+      legacySgdCols
     )}`
   );
 
@@ -1465,7 +1542,243 @@ async function runFixtures() {
     "✓ Fixture 31 passed (F1, F3, F4, F5, F6, F8 & §3.2): Enforced MFA, production APP_BASE_URL & test-account blocks, fail-closed drivers, integer minor-unit columns, explicit pipeline binding, and /setup lock verified"
   );
 
-  console.log("\nALL 31 KNOWN-ANSWER & GO-LIVE READINESS FIXTURES PASSED GREEN!");
+  // Fixture 32 (§3.5): No demo defaults, dynamic 12-month chart in workspace timezone, required lead conversion amount in workspace MYR currency, real MFA enrolment status, and unassigned scheduler flag
+  // 1. 12-month chart labels computed dynamically in workspace timezone
+  const klFixedMonths = computeLast12Months(
+    "Asia/Kuala_Lumpur (GMT+08:00)",
+    new Date("2026-11-25T02:00:00Z")
+  );
+  assert.equal(klFixedMonths.length, 12);
+  assert.equal(klFixedMonths[0], "12/2025");
+  assert.equal(klFixedMonths[11], "11/2026");
+  const liveMonths = computeLast12Months("Asia/Kuala_Lumpur (GMT+08:00)");
+  assert.equal(
+    liveMonths[11],
+    currentMonthKeyInTimezone("Asia/Kuala_Lumpur (GMT+08:00)"),
+    "12-month chart must end at the current month in the workspace timezone (§3.5.1)"
+  );
+
+  // 2. Converting a lead requires an explicit positive amount (no 22,000 / 18,500 default) and defaults currency to workspace mainCurrency ("MYR")
+  // Pre-clean any leftover fixture rows from interrupted runs
+  await prisma.task.deleteMany({
+    where: { associationName: "Unassigned Prospect Sdn Bhd" },
+  });
+  await prisma.manageItem.deleteMany({
+    where: {
+      OR: [
+        {
+          category: "invitation_nurture",
+          name: "Invitation Nurture: Unassigned Prospect Sdn Bhd",
+        },
+        {
+          category: "email_outbox",
+          subtitle: { contains: "hello@unassigned.example.com" },
+        },
+      ],
+    },
+  });
+  await prisma.partner.deleteMany({
+    where: { name: "Unassigned Prospect Sdn Bhd" },
+  });
+  await prisma.deal.deleteMany({
+    where: { company: "Kuala Lumpur Cloud Sdn Bhd" },
+  });
+  await prisma.lead.deleteMany({
+    where: { email: "farah@klcloud.example.com" },
+  });
+
+  const savedAcctRow = await prisma.appSetting.findUnique({
+    where: { key: "account_settings" },
+  });
+  const rawSavedVal = savedAcctRow ? JSON.parse(savedAcctRow.valueJson) : {};
+  const savedAcctVal =
+    rawSavedVal.accountName === "Test Co"
+      ? {
+          ...rawSavedVal,
+          accountName: "R-Cloud Enterprise PRM",
+          mainCurrency: "SGD",
+          timezone: "Asia/Singapore (GMT+08:00)",
+          defaultOwnerId: alexUser.id,
+          defaultOwnerName: "Alex Morgan",
+        }
+      : rawSavedVal;
+
+  try {
+    await prisma.appSetting.upsert({
+      where: { key: "account_settings" },
+      update: {
+        valueJson: JSON.stringify({
+          ...savedAcctVal,
+          accountName: "Test Co",
+          mainCurrency: "MYR",
+          timezone: "Asia/Kuala_Lumpur (GMT+08:00)",
+          defaultOwnerId: "",
+          defaultOwnerName: "",
+        }),
+      },
+      create: {
+        key: "account_settings",
+        valueJson: JSON.stringify({
+          ...savedAcctVal,
+          accountName: "Test Co",
+          mainCurrency: "MYR",
+          timezone: "Asia/Kuala_Lumpur (GMT+08:00)",
+          defaultOwnerId: "",
+          defaultOwnerName: "",
+        }),
+      },
+    });
+
+    const tempLead = await prisma.lead.create({
+      data: {
+        firstName: "Farah",
+        lastName: "Aziz",
+        company: "Kuala Lumpur Cloud Sdn Bhd",
+        email: "farah@klcloud.example.com",
+        status: "Accepted",
+        sourcePartnerId: "prt-1",
+        sourcePartnerName: "Apex Cloud Solutions Pte Ltd",
+      },
+    });
+
+    // Missing amount -> HTTP 400
+    const missingAmtRes = await executeResourceMutation(
+      mockAdminSession,
+      "CONVERT_LEAD_TO_DEAL",
+      { leadId: tempLead.id }
+    );
+    assert.equal(
+      missingAmtRes.status,
+      400,
+      "Converting a lead without an amount must return HTTP 400 (§3.5.1)"
+    );
+
+    // Explicit amount in workspace currency (MYR) -> HTTP 200
+    const validConvRes = await executeResourceMutation(
+      mockAdminSession,
+      "CONVERT_LEAD_TO_DEAL",
+      { leadId: tempLead.id, amount: 12500 }
+    );
+    assert.equal(validConvRes.status, 200);
+    const validConvJson = await validConvRes.json();
+    assert.equal(
+      validConvJson.deal.currency,
+      "MYR",
+      "Converted deal must default currency to workspace mainCurrency (MYR)"
+    );
+    assert.equal(validConvJson.deal.amount, toMinorUnits(12500));
+    assert.equal(validConvJson.deal.amountBase, toMinorUnits(12500));
+
+    // 3. Scheduler Day-7 task on an ownerless partner when defaultOwnerName is empty leaves assignedTo blank and flags [UNASSIGNED]
+    await prisma.partner.create({
+      data: {
+        name: "Unassigned Prospect Sdn Bhd",
+        programId: "prog-strategic",
+        programName: "R-Cloud Strategic Solution Partners",
+        status: "Pending",
+        owner: "",
+        currency: "MYR",
+        contactEmail: "hello@unassigned.example.com",
+        activeSince: "2020-01-01",
+        bankDetailsJson: encryptBankDetails("{}"),
+      },
+    });
+    const cronSecret = process.env.CRON_SECRET || "";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const schedReq: any = {
+      headers: new Headers({
+        authorization: `Bearer ${cronSecret}`,
+        "content-type": "application/json",
+      }),
+      cookies: { get: () => undefined },
+      json: async () => ({ jobType: "invitation_nurture" }),
+    };
+    const schedRes = await schedulerPost(schedReq);
+    assert.equal(schedRes.status, 200);
+    const flaggedTask = await prisma.task.findFirst({
+      where: { associationName: "Unassigned Prospect Sdn Bhd" },
+    });
+    assert.ok(
+      flaggedTask,
+      "Day-7 task must be created for overdue pending partner"
+    );
+    assert.equal(
+      flaggedTask.assignedTo,
+      "",
+      "Task for ownerless partner with no defaultOwnerName must remain unassigned (never 'Alex Morgan')"
+    );
+    assert.equal(flaggedTask.status, "Unassigned (Needs Owner)");
+    assert.ok(
+      flaggedTask.description.includes("[UNASSIGNED"),
+      `Expected [UNASSIGNED] flag in task description, got ${flaggedTask.description}`
+    );
+  } finally {
+    await prisma.task.deleteMany({
+      where: { associationName: "Unassigned Prospect Sdn Bhd" },
+    });
+    await prisma.manageItem.deleteMany({
+      where: {
+        OR: [
+          {
+            category: "invitation_nurture",
+            name: "Invitation Nurture: Unassigned Prospect Sdn Bhd",
+          },
+          {
+            category: "email_outbox",
+            subtitle: { contains: "hello@unassigned.example.com" },
+          },
+        ],
+      },
+    });
+    await prisma.partner.deleteMany({
+      where: { name: "Unassigned Prospect Sdn Bhd" },
+    });
+    await prisma.deal.deleteMany({
+      where: { company: "Kuala Lumpur Cloud Sdn Bhd" },
+    });
+    await prisma.lead.deleteMany({
+      where: { email: "farah@klcloud.example.com" },
+    });
+    await prisma.appSetting.upsert({
+      where: { key: "account_settings" },
+      update: { valueJson: JSON.stringify(savedAcctVal) },
+      create: {
+        key: "account_settings",
+        valueJson: JSON.stringify(savedAcctVal),
+      },
+    });
+  }
+
+  // 4. Real MFA status on GET /api/auth without leaking mfaSecret
+  const tempSess = await createServerSessionRow({
+    userId: alexUser.id,
+    identityType: "coworker",
+    ttlMs: 3600 * 1000,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const authStatusReq: any = {
+    url: "http://127.0.0.1:3000/api/auth",
+    nextUrl: new URL("http://127.0.0.1:3000/api/auth"),
+    cookies: {
+      get: (name: string) =>
+        name === "rprm_session" ? { value: tempSess.cookieValue } : undefined,
+    },
+  };
+  const authStatusRes = await authGet(authStatusReq);
+  const authStatusJson = await authStatusRes.json();
+  assert.equal(authStatusJson.session.mfaEnrolled, true);
+  assert.equal(
+    JSON.stringify(authStatusJson).includes(enrolledForAlex.secret),
+    false,
+    "GET /api/auth must never expose the user's TOTP secret outside enrolment (§3.5.1)"
+  );
+  await revokeServerSessionById(tempSess.sessionRowId);
+
+  console.log(
+    "✓ Fixture 32 passed (§3.5): Dynamic 12-month timezone chart, required lead-to-deal amount in workspace MYR currency, unassigned scheduler flag, and real non-leaking MFA status verified"
+  );
+
+  console.log("\nALL 32 KNOWN-ANSWER & GO-LIVE READINESS FIXTURES PASSED GREEN!");
   await prisma.$disconnect();
 }
 

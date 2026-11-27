@@ -4,28 +4,53 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { EntityListToolbar } from "@/components/SharedEngines";
-import { RefreshCw, X } from "lucide-react";
+import {
+  SUPPORTED_CURRENCIES,
+  CURRENCY_LABELS,
+  currentMonthKeyInTimezone,
+  computeLast12Months,
+} from "@/lib/prmEngine";
+import { X } from "lucide-react";
 
 export default function TransactionsListPage() {
-  const { transactions, partners, customers, deals, mutate } = usePrm();
+  const { transactions, partners, customers, deals, settings, mutate } =
+    usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
 
+  const acct = settings?.account_settings || {};
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
+  const currentMonthKey = currentMonthKeyInTimezone(acct.timezone);
+  const currentQuarterKeys = computeLast12Months(acct.timezone).slice(-3);
+
   const [form, setForm] = useState({
-    name: "INV-2026-955 · Subscription Payment",
-    currency: "SGD",
-    amount: "14500",
-    customerName: "Solaris Luxury Resort Group",
-    dealName: "ENT - Solaris Luxury Resort Group (Annual)",
-    partnerName: "Apex Cloud Solutions Pte Ltd",
+    name: "",
+    currency: "",
+    amount: "",
+    customerName: "",
+    dealName: "",
+    partnerName: "",
   });
 
+  const openModal = () => {
+    setForm({
+      name: "",
+      currency: baseCurrency,
+      amount: "",
+      customerName: customers[0]?.name || "",
+      dealName: deals[0]?.name || "",
+      partnerName: partners[0]?.name || "",
+    });
+    setModalOpen(true);
+  };
+
   const filtered = transactions.filter((t) => {
-    if (activeView === "This Month" && t.monthKey !== "11/2026") return false;
+    if (activeView === "This Month" && t.monthKey !== currentMonthKey)
+      return false;
     if (
       activeView === "This Quarter" &&
-      !["09/2026", "10/2026", "11/2026"].includes(t.monthKey)
+      !currentQuarterKeys.includes(t.monthKey)
     )
       return false;
     if (
@@ -43,25 +68,13 @@ export default function TransactionsListPage() {
     e.preventDefault();
     await mutate(
       "CREATE_TRANSACTION",
-      form,
+      {
+        ...form,
+        currency: form.currency || baseCurrency,
+      },
       `Transaction "${form.name}" recorded!`
     );
     setModalOpen(false);
-  };
-
-  const handlePullStripe = async () => {
-    await mutate(
-      "CREATE_TRANSACTION",
-      {
-        name: `STRIPE-SYNC-${Math.floor(1000 + Math.random() * 9000)} · Automated Renewal`,
-        amount: 9600,
-        currency: "SGD",
-        partnerName: "Apex Cloud Solutions Pte Ltd",
-        customerName: "Solaris Luxury Resort Group",
-        dealName: "ENT - Solaris Luxury Resort Group (Annual)",
-      },
-      "Pulled 1 new recurring invoice transaction from Stripe!"
-    );
   };
 
   return (
@@ -75,16 +88,7 @@ export default function TransactionsListPage() {
         search={search}
         onSearchChange={setSearch}
         primaryActionLabel="Add a new transaction"
-        onPrimaryAction={() => setModalOpen(true)}
-        extraRightControls={
-          <button
-            onClick={handlePullStripe}
-            className="px-3 py-1.5 rounded-lg border border-blue-600 text-blue-700 bg-blue-50 hover:bg-blue-100 text-xs font-semibold flex items-center space-x-1.5"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Pull</span>
-          </button>
-        }
+        onPrimaryAction={openModal}
       />
 
       <div className="max-w-[1440px] mx-auto px-6 py-5">
@@ -95,7 +99,7 @@ export default function TransactionsListPage() {
                 <th className="py-3 px-4 font-semibold">Name</th>
                 <th className="py-3 px-3 font-semibold text-right">Amount</th>
                 <th className="py-3 px-3 font-semibold text-right">
-                  Amount (SGD)
+                  Amount ({baseCurrency})
                 </th>
                 <th className="py-3 px-3 font-semibold">Partner</th>
                 <th className="py-3 px-3 font-semibold">Customer</th>
@@ -107,7 +111,10 @@ export default function TransactionsListPage() {
               {filtered.map((t) => (
                 <tr key={t.id} className="hover:bg-blue-50/40">
                   <td className="py-3 px-4 font-bold text-blue-700">
-                    <Link href={`/transactions/${t.id}`} className="hover:underline">
+                    <Link
+                      href={`/transactions/${t.id}`}
+                      className="hover:underline"
+                    >
                       {t.name}
                     </Link>
                   </td>
@@ -115,13 +122,18 @@ export default function TransactionsListPage() {
                     {t.currency} {t.amount.toLocaleString()}
                   </td>
                   <td className="py-3 px-3 text-right font-bold text-blue-700">
-                    SGD {t.amountSgd.toLocaleString()}
+                    {baseCurrency}{" "}
+                    {(t.amountBase ?? t.amount ?? 0).toLocaleString()}
                   </td>
                   <td className="py-3 px-3 font-medium text-blue-600">
-                    {t.partnerName}
+                    {t.partnerName || "—"}
                   </td>
-                  <td className="py-3 px-3 text-slate-800">{t.customerName}</td>
-                  <td className="py-3 px-3 text-slate-600">{t.dealName}</td>
+                  <td className="py-3 px-3 text-slate-800">
+                    {t.customerName || "—"}
+                  </td>
+                  <td className="py-3 px-3 text-slate-600">
+                    {t.dealName || "—"}
+                  </td>
                   <td className="py-3 px-4 text-slate-500">{t.monthKey}</td>
                 </tr>
               ))}
@@ -145,12 +157,13 @@ export default function TransactionsListPage() {
             <div className="p-5 space-y-3">
               <div>
                 <label className="block font-medium text-slate-700 mb-1">
-                  Invoice / Transaction reference
+                  Invoice / Transaction reference *
                 </label>
                 <input
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="INV-0001"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -160,16 +173,17 @@ export default function TransactionsListPage() {
                     Currency
                   </label>
                   <select
-                    value={form.currency}
+                    value={form.currency || baseCurrency}
                     onChange={(e) =>
                       setForm({ ...form, currency: e.target.value })
                     }
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
-                    <option value="SGD">Singapore Dollar (SGD)</option>
-                    <option value="USD">US Dollar (USD)</option>
-                    <option value="EUR">Euro (EUR)</option>
-                    <option value="MYR">Malaysian Ringgit (MYR)</option>
+                    {SUPPORTED_CURRENCIES.map((code) => (
+                      <option key={code} value={code}>
+                        {CURRENCY_LABELS[code] || code} ({code})
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -179,10 +193,13 @@ export default function TransactionsListPage() {
                   <input
                     required
                     type="number"
+                    min="0.01"
+                    step="any"
                     value={form.amount}
                     onChange={(e) =>
                       setForm({ ...form, amount: e.target.value })
                     }
+                    placeholder="Enter amount"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -198,6 +215,7 @@ export default function TransactionsListPage() {
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
+                  <option value="">None</option>
                   {customers.map((c) => (
                     <option key={c.id} value={c.name}>
                       {c.name}
@@ -216,6 +234,7 @@ export default function TransactionsListPage() {
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
+                  <option value="">None</option>
                   {deals.map((d) => (
                     <option key={d.id} value={d.name}>
                       {d.name}
@@ -234,6 +253,7 @@ export default function TransactionsListPage() {
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
+                  <option value="">None</option>
                   {partners.map((p) => (
                     <option key={p.id} value={p.name}>
                       {p.name}

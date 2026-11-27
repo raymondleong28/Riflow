@@ -8,16 +8,24 @@ import {
   StatusBadge,
   DEAL_STAGES_10,
 } from "@/components/SharedEngines";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 import { LayoutList, Kanban } from "lucide-react";
 
 export default function DealsListPage() {
-  const { deals, setGlobalModal, mutate, showToast } = usePrm();
+  const { deals, settings, session, setGlobalModal, mutate, showToast } =
+    usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<"kanban" | "list">("kanban");
 
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
+
   const filtered = deals.filter((d) => {
-    if (activeView === "My Deals" && d.owner !== "Alex Morgan") return false;
+    // §3.5.1: Filter on the signed-in user's id
+    if (activeView === "My Deals" && d.ownerId !== session?.userId) {
+      return false;
+    }
     if (activeView === "Pending Deals" && d.status !== "Pending") return false;
     if (
       search &&
@@ -35,7 +43,7 @@ export default function DealsListPage() {
       "UPDATE_DEAL_STAGE",
       { id: dealId, stage: newStage },
       newStage === "Closed Won"
-        ? `Deal moved to Closed Won! 18% Pending Commission Reward auto-generated.`
+        ? "Deal moved to Closed Won and evaluated against partner tier commission rules!"
         : `Deal moved to "${newStage}"`
     );
   };
@@ -88,14 +96,13 @@ export default function DealsListPage() {
         }
       />
 
-      {/* 10-Stage Kanban View */}
       {viewMode === "kanban" ? (
         <div className="max-w-[1440px] mx-auto px-6 py-5 overflow-x-auto">
           <div className="flex space-x-4 min-w-[2350px] pb-4">
             {DEAL_STAGES_10.map((stage) => {
               const stageDeals = filtered.filter((d) => d.stage === stage);
-              const totalSgd = stageDeals.reduce(
-                (acc, d) => acc + (d.amountSgd || 0),
+              const totalBase = stageDeals.reduce(
+                (acc, d) => acc + Number(d.amountBase || 0),
                 0
               );
               return (
@@ -113,7 +120,7 @@ export default function DealsListPage() {
                       </span>
                     </div>
                     <p className="text-[11px] font-semibold text-blue-700 mt-1">
-                      SGD {totalSgd.toLocaleString()}
+                      {baseCurrency} {totalBase.toLocaleString()}
                     </p>
                   </div>
 
@@ -165,7 +172,6 @@ export default function DealsListPage() {
           </div>
         </div>
       ) : (
-        /* 16-Column List Table View */
         <div className="max-w-[1440px] mx-auto px-6 py-5">
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
@@ -179,7 +185,7 @@ export default function DealsListPage() {
                     Total Amount
                   </th>
                   <th className="py-3 px-3 font-semibold text-right">
-                    Total Amount (SGD)
+                    Total Amount ({baseCurrency})
                   </th>
                   <th className="py-3 px-3 font-semibold">Partner(s)</th>
                   <th className="py-3 px-3 font-semibold">
@@ -204,7 +210,9 @@ export default function DealsListPage() {
                         {d.name}
                       </Link>
                     </td>
-                    <td className="py-3 px-3 text-slate-700">{d.owner}</td>
+                    <td className="py-3 px-3 text-slate-700">
+                      {d.owner || "—"}
+                    </td>
                     <td className="py-3 px-3 text-slate-700">{d.clientName}</td>
                     <td className="py-3 px-3 font-medium text-slate-900">
                       {d.company}
@@ -213,13 +221,13 @@ export default function DealsListPage() {
                       {d.currency} {d.amount.toLocaleString()}
                     </td>
                     <td className="py-3 px-3 text-right font-bold text-blue-700">
-                      SGD {d.amountSgd.toLocaleString()}
+                      {baseCurrency} {Number(d.amountBase || 0).toLocaleString()}
                     </td>
                     <td className="py-3 px-3 text-blue-600 font-medium">
                       {d.partnerName}
                     </td>
                     <td className="py-3 px-3 text-slate-600">
-                      {d.assignedContact}
+                      {d.assignedContact || "—"}
                     </td>
                     <td className="py-3 px-3">
                       <StatusBadge status={d.status} />
@@ -240,12 +248,14 @@ export default function DealsListPage() {
                       </select>
                     </td>
                     <td className="py-3 px-3 text-slate-500">
-                      {d.stageEnteredAt}
+                      {d.stageEnteredAt || "—"}
                     </td>
                     <td className="py-3 px-3 text-slate-600">{d.source}</td>
-                    <td className="py-3 px-3 text-slate-600">{d.closeDate}</td>
+                    <td className="py-3 px-3 text-slate-600">
+                      {d.closeDate || "—"}
+                    </td>
                     <td className="py-3 px-3 text-slate-500">
-                      {d.expirationDate}
+                      {d.expirationDate || "—"}
                     </td>
                     <td className="py-3 px-4 text-slate-700">
                       {d.sourcePartnerName}

@@ -1,33 +1,110 @@
 // Pure, deterministic R-PRM domain engine for:
-// - Computed Dashboard & Partner KPIs (Fixes D4, D5)
-// - Structured Commission & Reward Rule Evaluation, Lifecycle & Clawback (Fixes D1-D3, §4.1)
-// - Multi-currency conversion with dated FX rates (§4.1.5)
-// - Server-side Asset & Content Scoping (Fixes D6, §4.3)
-// - Computed Account Mapping Overlaps (Fixes D11, §5.3)
+// - Computed Dashboard & Partner KPIs
+// - Structured Commission & Reward Rule Evaluation, Lifecycle & Clawback
+// - Multi-currency conversion with dated FX rates into workspace base currency
+// - Server-side Asset & Content Scoping
+// - Computed Account Mapping Overlaps
+// - Timezone-aware 12-month chart window calculation
 
 export interface DatedFxTable {
   rateDate: string;
   source: string;
-  ratesToSgd: Record<string, number>;
+  rates: Record<string, number>;
 }
 
 export const DEFAULT_FX_TABLE: DatedFxTable = {
   rateDate: "2026-11-24",
-  source: "MAS Daily Reference FX",
-  ratesToSgd: {
+  source: "Reference FX Table",
+  rates: {
     SGD: 1.0,
     USD: 1.35,
     EUR: 1.45,
     MYR: 0.3,
+    GBP: 1.7,
+    AUD: 0.88,
   },
 };
+
+export const SUPPORTED_CURRENCIES: string[] = Object.keys(DEFAULT_FX_TABLE.rates);
+
+export const CURRENCY_LABELS: Record<string, string> = {
+  SGD: "Singapore Dollar",
+  USD: "US Dollar",
+  EUR: "Euro",
+  MYR: "Malaysian Ringgit",
+  GBP: "British Pound",
+  AUD: "Australian Dollar",
+};
+
+export function extractIanaTimezone(timezoneSetting?: string | null): string {
+  const raw = String(timezoneSetting || "").trim();
+  if (!raw) return "UTC";
+  const candidate = raw.split(/\s+/)[0] || "UTC";
+  try {
+    Intl.DateTimeFormat("en-US", { timeZone: candidate });
+    return candidate;
+  } catch {
+    return "UTC";
+  }
+}
+
+// §3.5.1: Compute the last 12 months (MM/YYYY) ending at today in the workspace timezone
+export function computeLast12Months(
+  timezoneSetting?: string | null,
+  now: Date = new Date()
+): string[] {
+  const tz = extractIanaTimezone(timezoneSetting);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(now);
+
+  const yearPart = Number(parts.find((p) => p.type === "year")?.value || now.getUTCFullYear());
+  const monthPart = Number(parts.find((p) => p.type === "month")?.value || now.getUTCMonth() + 1);
+
+  const months: string[] = [];
+  for (let offset = 11; offset >= 0; offset--) {
+    let m = monthPart - offset;
+    let y = yearPart;
+    while (m <= 0) {
+      m += 12;
+      y -= 1;
+    }
+    months.push(`${String(m).padStart(2, "0")}/${y}`);
+  }
+  return months;
+}
+
+export function currentMonthKeyInTimezone(
+  timezoneSetting?: string | null,
+  now: Date = new Date()
+): string {
+  const window12 = computeLast12Months(timezoneSetting, now);
+  return window12[window12.length - 1];
+}
+
+export function currentIsoDateInTimezone(
+  timezoneSetting?: string | null,
+  now: Date = new Date()
+): string {
+  const tz = extractIanaTimezone(timezoneSetting);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const y = parts.find((p) => p.type === "year")?.value || String(now.getUTCFullYear());
+  const m = parts.find((p) => p.type === "month")?.value || String(now.getUTCMonth() + 1).padStart(2, "0");
+  const d = parts.find((p) => p.type === "day")?.value || String(now.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
 // F6: Money stored as integer minor units (cents) with a currency code
 export function toMinorUnits(value: number | string | null | undefined): number {
   const num = Number(value || 0);
   if (!Number.isFinite(num)) return 0;
-  // Values with decimals or realistic single-record amounts (< 1,000,000 major units) passed as major units convert to cents;
-  // already-converted integer minor units (>= 100 and tagged or passed via minor helper) stay exact.
   return Math.round(num * 100);
 }
 
@@ -49,26 +126,38 @@ export function normalizeInputToMinorUnits(
 
 export function convertWithDatedFx(
   amount: number,
-  currency = "SGD",
+  currency?: string,
+  baseCurrency?: string,
   fxTable: DatedFxTable = DEFAULT_FX_TABLE
 ) {
   if (!fxTable.rateDate) {
-    throw new Error("FX conversion refused: missing FX rateDate (§4.1.5)");
+    throw new Error("FX conversion refused: missing FX rateDate");
   }
-  const code = (currency || "SGD").toUpperCase();
-  const fxRate = fxTable.ratesToSgd[code];
-  if (typeof fxRate !== "number") {
+  const anchor = Object.keys(fxTable.rates)[0];
+  const targetCode = String(baseCurrency || anchor).trim().toUpperCase();
+  const code = String(currency || targetCode).trim().toUpperCase();
+  const sourceRate = fxTable.rates[code];
+  const targetRate = fxTable.rates[targetCode];
+  if (typeof sourceRate !== "number") {
     throw new Error(`FX conversion refused: unsupported currency ${code}`);
   }
-  const amountSgd = Math.round(amount * fxRate * 100) / 100;
+  if (typeof targetRate !== "number" || targetRate <= 0) {
+    throw new Error(`FX conversion refused: unsupported base currency ${targetCode}`);
+  }
+  const fxRate =
+    code === targetCode
+      ? 1
+      : Math.round((sourceRate / targetRate) * 1000000) / 1000000;
+  const amountBase = Math.round(amount * fxRate * 100) / 100;
   const originalAmountMinor = Math.round(amount * 100);
-  const amountSgdMinor = Math.round(originalAmountMinor * fxRate);
+  const amountBaseMinor = Math.round(originalAmountMinor * fxRate);
   return {
     originalAmount: amount,
     originalAmountMinor,
     currency: code,
-    amountSgd,
-    amountSgdMinor,
+    baseCurrency: targetCode,
+    amountBase,
+    amountBaseMinor,
     fxRate,
     fxRateDate: fxTable.rateDate,
     fxSource: fxTable.source,
@@ -116,7 +205,7 @@ export interface StructuredRewardRule {
 
 // Upgrade legacy free-text reward JSON objects into StructuredRewardRule objects automatically
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeRewardRule(raw: any): StructuredRewardRule {
+export function normalizeRewardRule(raw: any, fallbackCurrency?: string): StructuredRewardRule {
   if (raw && raw.amountMode && raw.valueType) {
     return raw as StructuredRewardRule;
   }
@@ -140,7 +229,7 @@ export function normalizeRewardRule(raw: any): StructuredRewardRule {
     valueType: "Cash",
     amountMode: isPct ? "percentage" : "fixed",
     rateOrAmount: numericVal,
-    currency: "SGD",
+    currency: raw?.currency || fallbackCurrency,
     duration: isPct ? "recurring" : "one_off",
     startOffsetMonths: 1,
     durationMonths: isPct ? 12 : 1,
@@ -161,7 +250,7 @@ export interface MerchantInvoiceEvent {
   paidDate: string;
   isStillPartnerClient?: boolean;
   isRefunded?: boolean;
-  // For Referral Entry per-deal written override (§4.1.4)
+  // For per-deal written override before order acceptance
   agreedOverrideRatePct?: number;
   agreedBeforeAcceptanceTimestamp?: string;
   orderAcceptedTimestamp?: string;
@@ -177,27 +266,26 @@ export interface GeneratedRewardResult {
   amount: number;
   amountMinor: number;
   currency: string;
-  amountSgd: number;
-  amountSgdMinor: number;
+  amountBase: number;
+  amountBaseMinor: number;
   fxRate: number;
   fxRateDate: string;
   status: "Pending" | "Validated";
   billingMonth: number;
 }
 
-// Preset rules for Eber's 3 real commission programs (§4.1.4)
-export const EBER_COMMISSION_FIXTURE_RULES: Record<
+// Editable starter commission rule templates (seeded into ManageItem category "commission_templates" so admins can edit them)
+export const DEFAULT_COMMISSION_TEMPLATES: Record<
   "biz_partner_one_off" | "biz_partner_premium_recurring" | "referral_entry",
   StructuredRewardRule
 > = {
   biz_partner_one_off: {
-    id: "rule-eber-biz-oneoff",
+    id: "tpl-biz-oneoff",
     title: "Biz Partner — 1 Month Subscription at Month-4 Paid Invoice",
     trigger: "transaction_paid",
     valueType: "Cash",
     amountMode: "one_month_subscription",
     rateOrAmount: 100, // 100% of 1 month subscription
-    currency: "SGD",
     duration: "one_off",
     startOffsetMonths: 4,
     durationMonths: 1,
@@ -205,13 +293,12 @@ export const EBER_COMMISSION_FIXTURE_RULES: Record<
     clawbackOnRefund: true,
   },
   biz_partner_premium_recurring: {
-    id: "rule-eber-biz-premium",
+    id: "tpl-biz-premium",
     title: "Biz Partner Premium — 20% Months 4–15, 10% Months 16–27",
     trigger: "transaction_paid",
     valueType: "Cash",
     amountMode: "percentage",
     rateOrAmount: 20,
-    currency: "SGD",
     duration: "recurring",
     startOffsetMonths: 4,
     durationMonths: 24, // months 4..27 inclusive
@@ -223,7 +310,7 @@ export const EBER_COMMISSION_FIXTURE_RULES: Record<
     clawbackOnRefund: true,
   },
   referral_entry: {
-    id: "rule-eber-referral-entry",
+    id: "tpl-referral-entry",
     title: "Referral Entry — Per-Deal Written Override Before Order Acceptance",
     trigger: "transaction_paid",
     conditions: [
@@ -232,7 +319,6 @@ export const EBER_COMMISSION_FIXTURE_RULES: Record<
     valueType: "Cash",
     amountMode: "percentage",
     rateOrAmount: 0, // uses event.agreedOverrideRatePct when valid
-    currency: "SGD",
     duration: "one_off",
     startOffsetMonths: 1,
     durationMonths: 1,
@@ -245,14 +331,14 @@ export function evaluateRuleForInvoice(
   rule: StructuredRewardRule,
   event: MerchantInvoiceEvent,
   existingIdempotencyKeys: Set<string> = new Set(),
-  fxTable: DatedFxTable = DEFAULT_FX_TABLE
+  fxTable: DatedFxTable = DEFAULT_FX_TABLE,
+  baseCurrency?: string
 ): GeneratedRewardResult | null {
   const idempotencyKey = `${event.invoiceId}::${rule.id}::M${event.billingMonth}`;
   if (existingIdempotencyKeys.has(idempotencyKey)) {
-    return null; // Idempotent: never double-pay (§4.1.2)
+    return null; // Idempotent: never double-pay
   }
 
-  // Stop if merchant is no longer the partner's client
   if (event.isStillPartnerClient === false) {
     return null;
   }
@@ -273,7 +359,6 @@ export function evaluateRuleForInvoice(
     }
   }
 
-  // Check conditions (e.g., Referral entry written agreement before order acceptance)
   if (rule.conditions && rule.conditions.length > 0) {
     for (const cond of rule.conditions) {
       if (cond.field === "agreedBeforeAcceptance") {
@@ -320,7 +405,12 @@ export function evaluateRuleForInvoice(
 
   if (rewardAmount <= 0) return null;
 
-  const fx = convertWithDatedFx(rewardAmount, event.currency, fxTable);
+  const fx = convertWithDatedFx(
+    rewardAmount,
+    event.currency,
+    baseCurrency,
+    fxTable
+  );
 
   return {
     idempotencyKey,
@@ -332,8 +422,8 @@ export function evaluateRuleForInvoice(
     amount: rewardAmount,
     amountMinor: fx.originalAmountMinor,
     currency: fx.currency,
-    amountSgd: fx.amountSgd,
-    amountSgdMinor: fx.amountSgdMinor,
+    amountBase: fx.amountBase,
+    amountBaseMinor: fx.amountBaseMinor,
     fxRate: fx.fxRate,
     fxRateDate: fx.fxRateDate,
     status: rule.requiresValidation ? "Pending" : "Validated",
@@ -341,7 +431,7 @@ export function evaluateRuleForInvoice(
   };
 }
 
-// Compute Partner KPIs dynamically from leads, deals, rewards (Fixes D4 & D5)
+// Compute Partner KPIs dynamically from leads, deals, rewards
 export function computePartnerKpis(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   partner: any,
@@ -367,15 +457,15 @@ export function computePartnerKpis(
   const pendingRewards = pRewards.filter((r) => r.status === "Pending");
 
   const sourcedRevenue365d = wonDeals.reduce(
-    (sum, d) => sum + Number(d.amountSgd || 0),
+    (sum, d) => sum + Number(d.amountBase || 0),
     0
   );
   const influencedRev365d = openDeals.reduce(
-    (sum, d) => sum + Number(d.amountSgd || 0),
+    (sum, d) => sum + Number(d.amountBase || 0),
     0
   );
   const pendingRewardsAll = pendingRewards.reduce(
-    (sum, r) => sum + Number(r.amountSgd || 0),
+    (sum, r) => sum + Number(r.amountBase || 0),
     0
   );
   const winRatePct =
@@ -387,7 +477,7 @@ export function computePartnerKpis(
     submittedLeads365d: pLeads.length,
     registeredDeals365d: pDeals.length,
     wonDealsCount: wonDeals.length,
-    wonDealsAmountSgd: sourcedRevenue365d,
+    wonDealsAmountBase: sourcedRevenue365d,
     winRatePct,
     sourcedRevenue365d,
     influencedRev365d,
@@ -398,7 +488,6 @@ export function computePartnerKpis(
 
 // F2: Random, Non-Derivable, Rotatable Per-Partner Public Lead Form Token (stored hashed in PostgreSQL)
 export function hashLeadFormToken(rawToken: string): string {
-  // Pure universal SHA-256 or deterministic cryptographic digest
   let h1 = 0xdeadbeef ^ rawToken.length;
   let h2 = 0x41c6ce57 ^ rawToken.length;
   let h3 = 0x9e3779b9 ^ rawToken.length;
@@ -455,7 +544,7 @@ export function resolvePartnerByLeadFormToken(
   partners: any[]
 ) {
   if (!token || !token.startsWith("lf_") || token.length < 16) {
-    return null; // Reject raw partner IDs like "prt-1" or malformed tokens
+    return null; // Reject raw partner IDs or malformed tokens
   }
   const candidateHash = hashLeadFormToken(token);
   return (
@@ -507,7 +596,7 @@ export function resolveExplicitProgramAndPipeline(
   };
 }
 
-// Look up a Partner's actual Level Rules from their Program (§13.1 & F8: no silent fallback to first program)
+// Look up a Partner's actual Level Rules from their Program
 export function getPartnerLevelRules(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   partner: any,
@@ -528,11 +617,12 @@ export function getPartnerLevelRules(
   const matchedLevel =
     levels.find((l) => l.name === partner?.qualifyingLevel) || levels[0];
   if (!matchedLevel || !Array.isArray(matchedLevel.rewards)) return [];
-  return matchedLevel.rewards.map(normalizeRewardRule);
+  return matchedLevel.rewards.map((r: unknown) =>
+    normalizeRewardRule(r, partner?.currency)
+  );
 }
 
-// Generate rewards for a Transaction or Closed Won Deal using the Partner's ACTUAL tier level rules (§13.1 & F6)
-// Example: Apex Cloud Solutions (Platinum Elite -> 25% + 5% kickback) on SGD 28,500 produces SGD 7,125 (712500 minor) and SGD 1,425 (142500 minor).
+// Generate rewards for a Transaction or Closed Won Deal using the Partner's actual tier level rules
 export function generateRewardsFromPartnerLevel(
   txOrDeal: {
     id: string;
@@ -546,7 +636,8 @@ export function generateRewardsFromPartnerLevel(
   partner: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   programs: any[],
-  fxTable: DatedFxTable = DEFAULT_FX_TABLE
+  fxTable: DatedFxTable = DEFAULT_FX_TABLE,
+  baseCurrency?: string
 ) {
   const rules = getPartnerLevelRules(partner, programs);
   const generated: {
@@ -558,8 +649,8 @@ export function generateRewardsFromPartnerLevel(
     amount: number;
     amountMinor: number;
     currency: string;
-    amountSgd: number;
-    amountSgdMinor: number;
+    amountBase: number;
+    amountBaseMinor: number;
     fromActivity: string;
     fromRewardRule: string;
     status: string;
@@ -570,7 +661,12 @@ export function generateRewardsFromPartnerLevel(
     if (rule.amountMode === "percentage" && rule.rateOrAmount > 0) {
       const rawAmt =
         Math.round(txOrDeal.amount * (rule.rateOrAmount / 100) * 100) / 100;
-      const fx = convertWithDatedFx(rawAmt, txOrDeal.currency, fxTable);
+      const fx = convertWithDatedFx(
+        rawAmt,
+        txOrDeal.currency,
+        baseCurrency,
+        fxTable
+      );
       generated.push({
         ruleId: rule.id,
         ruleTitle: rule.title,
@@ -580,8 +676,8 @@ export function generateRewardsFromPartnerLevel(
         amount: fx.originalAmount,
         amountMinor: fx.originalAmountMinor,
         currency: fx.currency,
-        amountSgd: fx.amountSgd,
-        amountSgdMinor: fx.amountSgdMinor,
+        amountBase: fx.amountBase,
+        amountBaseMinor: fx.amountBaseMinor,
         fromActivity: txOrDeal.name,
         fromRewardRule: rule.title,
         status: rule.requiresValidation ? "Pending" : "Accepted",
@@ -594,7 +690,8 @@ export function generateRewardsFromPartnerLevel(
     ) {
       const fx = convertWithDatedFx(
         rule.rateOrAmount,
-        rule.currency || "SGD",
+        rule.currency || txOrDeal.currency,
+        baseCurrency,
         fxTable
       );
       generated.push({
@@ -606,8 +703,8 @@ export function generateRewardsFromPartnerLevel(
         amount: fx.originalAmount,
         amountMinor: fx.originalAmountMinor,
         currency: fx.currency,
-        amountSgd: fx.amountSgd,
-        amountSgdMinor: fx.amountSgdMinor,
+        amountBase: fx.amountBase,
+        amountBaseMinor: fx.amountBaseMinor,
         fromActivity: txOrDeal.name,
         fromRewardRule: rule.title,
         status: rule.requiresValidation ? "Pending" : "Accepted",
@@ -619,7 +716,7 @@ export function generateRewardsFromPartnerLevel(
   return generated;
 }
 
-// Server-side Asset & Content Scoping (Fixes D6, §4.3)
+// Server-side Asset & Content Scoping
 // Combination logic for "some_partners": OR across program/level, group, and partnerId
 export function canPartnerAccessAsset(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -669,7 +766,6 @@ export function canPartnerAccessAsset(
     return matchProgram || matchLevel || matchGroup || matchPartner;
   }
 
-  // Fallback check on subtitle / programVisibility string (e.g. "ISV & Tech Partners" vs "Strategic Partners")
   const vis = String(
     meta.programVisibility || assetItem.subtitle || "All Programs"
   ).toLowerCase();
@@ -701,7 +797,7 @@ export function canPartnerAccessAsset(
   return true;
 }
 
-// Compute Account Mapping Overlaps by matching normalized company key/domain (Fixes D11, §5.3)
+// Compute Account Mapping Overlaps by matching normalized company key/domain
 export function normalizeAccountKey(name: string): string {
   return (name || "")
     .toLowerCase()
@@ -733,12 +829,12 @@ export function computeAccountOverlaps(accounts: any[]) {
   });
 }
 
-// §14.2 Slice 4: Configurable Payout Schedule Engine (Monthly or Quarterly per account, overridable per program)
+// Configurable Payout Schedule Engine (Monthly or Quarterly per account, overridable per program)
 export type PayoutCadence = "monthly" | "quarterly";
 
 export interface PayoutScheduleConfig {
   cadence: PayoutCadence;
-  thresholdSgd: number;
+  thresholdBase: number;
 }
 
 export interface SchedulableReward {
@@ -747,7 +843,7 @@ export interface SchedulableReward {
   partnerName: string;
   amount: number;
   currency: string;
-  amountSgd: number;
+  amountBase: number;
   status: string;
   payoutNumber?: string;
   periodDate?: string; // YYYY-MM-DD or MM/YYYY
@@ -757,9 +853,10 @@ export function resolvePayoutPeriodKey(
   dateStr: string | undefined,
   cadence: PayoutCadence
 ): { periodKey: string; periodFrom: string; periodTo: string } {
-  let year = 2026;
-  let month = 11;
-  const raw = (dateStr || "2026-11-01").trim();
+  const now = new Date();
+  let year = now.getUTCFullYear();
+  let month = now.getUTCMonth() + 1;
+  const raw = String(dateStr || "").trim();
   if (/^\d{2}\/\d{4}$/.test(raw)) {
     const [m, y] = raw.split("/").map(Number);
     month = m;
@@ -797,7 +894,7 @@ export function resolvePartnerPayoutSchedule(
   programs: any[],
   accountSettings?: {
     autoPayoutSchedule?: string;
-    autoPayoutThresholdSgd?: number;
+    autoPayoutThresholdBase?: number;
   }
 ): PayoutScheduleConfig {
   const acctRaw = String(
@@ -807,7 +904,7 @@ export function resolvePartnerPayoutSchedule(
     ? "quarterly"
     : "monthly";
   const defaultThreshold = Number(
-    accountSettings?.autoPayoutThresholdSgd ?? 250
+    accountSettings?.autoPayoutThresholdBase ?? 250
   );
 
   const prog = programs.find(
@@ -822,7 +919,9 @@ export function resolvePartnerPayoutSchedule(
       ) {
         return {
           cadence: autoCfg.payoutCadence,
-          thresholdSgd: Number(autoCfg.payoutThresholdSgd ?? defaultThreshold),
+          thresholdBase: Number(
+            autoCfg.payoutThresholdBase ?? defaultThreshold
+          ),
         };
       }
     } catch {
@@ -832,7 +931,7 @@ export function resolvePartnerPayoutSchedule(
 
   return {
     cadence: defaultCadence,
-    thresholdSgd: defaultThreshold,
+    thresholdBase: defaultThreshold,
   };
 }
 
@@ -844,7 +943,7 @@ export function buildScheduledPayoutBatches(
   programs: any[],
   accountSettings?: {
     autoPayoutSchedule?: string;
-    autoPayoutThresholdSgd?: number;
+    autoPayoutThresholdBase?: number;
   }
 ) {
   const eligible = rewards.filter(
@@ -856,7 +955,7 @@ export function buildScheduledPayoutBatches(
     {
       partnerName: string;
       cadence: PayoutCadence;
-      thresholdSgd: number;
+      thresholdBase: number;
       periodKey: string;
       periodFrom: string;
       periodTo: string;
@@ -877,7 +976,7 @@ export function buildScheduledPayoutBatches(
       groups[groupKey] = {
         partnerName: rw.partnerName,
         cadence: sched.cadence,
-        thresholdSgd: sched.thresholdSgd,
+        thresholdBase: sched.thresholdBase,
         periodKey: period.periodKey,
         periodFrom: period.periodFrom,
         periodTo: period.periodTo,
@@ -895,18 +994,18 @@ export function buildScheduledPayoutBatches(
     periodKey: string;
     periodFrom: string;
     periodTo: string;
-    amountSgd: number;
+    amountBase: number;
     rewardsCount: number;
     rewardIds: string[];
   }> = [];
 
   let seq = 1;
   for (const grp of Object.values(groups)) {
-    const totalSgd =
+    const totalBase =
       Math.round(
-        grp.rewards.reduce((s, r) => s + Number(r.amountSgd || 0), 0) * 100
+        grp.rewards.reduce((s, r) => s + Number(r.amountBase || 0), 0) * 100
       ) / 100;
-    if (totalSgd >= grp.thresholdSgd) {
+    if (totalBase >= grp.thresholdBase) {
       batches.push({
         payoutNumber: `PO-${grp.periodKey}-${String(seq++).padStart(2, "0")}`,
         name: `${
@@ -917,7 +1016,7 @@ export function buildScheduledPayoutBatches(
         periodKey: grp.periodKey,
         periodFrom: grp.periodFrom,
         periodTo: grp.periodTo,
-        amountSgd: totalSgd,
+        amountBase: totalBase,
         rewardsCount: grp.rewards.length,
         rewardIds: grp.rewards.map((r) => r.id),
       });
@@ -927,7 +1026,7 @@ export function buildScheduledPayoutBatches(
   return batches;
 }
 
-// §14.2 Slice 6: Onboarding Stage Completion & Validation Gate Evaluator
+// Onboarding Stage Completion & Validation Gate Evaluator
 export interface StageActionRecord {
   id: string;
   stage: string;

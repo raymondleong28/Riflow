@@ -9,13 +9,8 @@ import {
   StatusBadge,
   NotesAndActivitiesTab,
 } from "@/components/SharedEngines";
-import {
-  ExternalLink,
-  Edit3,
-  Check,
-  Award,
-  Plus,
-} from "lucide-react";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
+import { ExternalLink, Edit3, Check, Award, Plus } from "lucide-react";
 
 const RIGHT_TABS = [
   "Onboarding",
@@ -36,9 +31,10 @@ const RIGHT_TABS = [
 export default function PartnerDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const id = String(params?.id || "prt-1");
+  const id = String(params?.id || "");
   const {
     partners,
+    programs,
     deals,
     leads,
     rewards,
@@ -46,10 +42,17 @@ export default function PartnerDetailPage() {
     trackingLinks,
     teamMembers,
     manageItems,
+    settings,
+    loading,
     mutate,
   } = usePrm();
 
-  const partner = partners.find((p) => p.id === id) || partners[0];
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
+
+  // §1.4 & §3.5.1: Never fall back to a hardcoded ID or partners[0]
+  const partner = partners.find((p) => p.id === id);
+
   const [activeTab, setActiveTab] =
     useState<(typeof RIGHT_TABS)[number]>("Onboarding");
   const [editing, setEditing] = useState(false);
@@ -63,19 +66,31 @@ export default function PartnerDetailPage() {
     industry?: string;
   }>({});
 
-  // Quick Team Invite on Partner Page
   const [memberName, setMemberName] = useState("");
   const [memberEmail, setMemberEmail] = useState("");
   const [memberRole, setMemberRole] = useState("Sales Rep");
 
-  // Quick Certification Award on Partner Page
   const allCertifications = manageItems.filter(
     (m) => m.category === "certifications"
   );
   const [selectedCertId, setSelectedCertId] = useState("");
 
-  if (!partner) {
+  if (loading) {
     return <div className="p-8 text-sm text-slate-500">Loading partner...</div>;
+  }
+
+  if (!partner) {
+    return (
+      <div className="max-w-xl mx-auto p-8 space-y-3">
+        <BackBreadcrumb href="/partners/views/all" label="Partners" />
+        <div className="p-6 bg-white rounded-xl border border-slate-200 text-sm text-slate-700">
+          <p className="font-bold text-slate-900">Partner not found</p>
+          <p className="text-xs text-slate-500 mt-1">
+            No partner record exists with ID <code>{id || "(empty)"}</code>.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   let bankInfo: Record<string, string> = {};
@@ -83,6 +98,29 @@ export default function PartnerDetailPage() {
     bankInfo = JSON.parse(partner.bankDetailsJson || "{}");
   } catch {
     bankInfo = {};
+  }
+
+  const matchedProgram = programs.find(
+    (pr) => pr.id === partner.programId || pr.name === partner.programName
+  );
+  let programLevelNames: string[] = [];
+  if (matchedProgram?.levelsJson) {
+    try {
+      const parsedLevels = JSON.parse(matchedProgram.levelsJson);
+      if (Array.isArray(parsedLevels)) {
+        programLevelNames = parsedLevels
+          .map((l: { name?: string }) => String(l?.name || "").trim())
+          .filter(Boolean);
+      }
+    } catch {
+      programLevelNames = [];
+    }
+  }
+  if (
+    partner.qualifyingLevel &&
+    !programLevelNames.includes(partner.qualifyingLevel)
+  ) {
+    programLevelNames = [partner.qualifyingLevel, ...programLevelNames];
   }
 
   const partnerDeals = deals.filter((d) => d.partnerName === partner.name);
@@ -111,7 +149,7 @@ export default function PartnerDetailPage() {
     await mutate(
       "UPDATE_PARTNER",
       { id: partner.id, data: editFields },
-      "Partner properties saved to SQLite!"
+      "Partner properties saved!"
     );
     setEditing(false);
   };
@@ -162,16 +200,17 @@ export default function PartnerDetailPage() {
 
   return (
     <div className="max-w-[1440px] mx-auto px-6 py-5 space-y-5">
-      {/* Header */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1">
           <BackBreadcrumb href="/partners/views/all" label="Partners" />
           <div className="flex items-center space-x-3 pt-1">
             <h1 className="text-xl font-bold text-slate-900">{partner.name}</h1>
             <StatusBadge status={partner.status} />
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-              {partner.qualifyingLevel}
-            </span>
+            {partner.qualifyingLevel && (
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                {partner.qualifyingLevel}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center space-x-2">
@@ -205,7 +244,7 @@ export default function PartnerDetailPage() {
         </div>
       </div>
 
-      {/* §5.1 Computed Partner KPI Strip (Submitted leads, Registered deals, Sourced revenue, Influenced revenue, Pending rewards) */}
+      {/* Computed Partner KPI Strip */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
         <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
           <p className="text-slate-500">Submitted leads (Last 365 days)</p>
@@ -224,13 +263,15 @@ export default function PartnerDetailPage() {
             Partner-sourced revenue (365d)
           </p>
           <p className="text-xl font-extrabold text-blue-700 mt-1">
-            SGD {partner.sourcedRevenue365d.toLocaleString()}
+            {baseCurrency}{" "}
+            {Number(partner.sourcedRevenue365d || 0).toLocaleString()}
           </p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
           <p className="text-slate-500">Partner-influenced revenue (365d)</p>
           <p className="text-xl font-extrabold text-slate-900 mt-1">
-            SGD {partner.influencedRev365d.toLocaleString()}
+            {baseCurrency}{" "}
+            {Number(partner.influencedRev365d || 0).toLocaleString()}
           </p>
         </div>
         <div className="bg-white rounded-xl border border-emerald-200 p-3.5 shadow-sm">
@@ -238,30 +279,33 @@ export default function PartnerDetailPage() {
             Pending rewards (All time)
           </p>
           <p className="text-xl font-extrabold text-emerald-700 mt-1">
-            SGD {partner.pendingRewardsAll.toLocaleString()}
+            {baseCurrency}{" "}
+            {Number(partner.pendingRewardsAll || 0).toLocaleString()}
           </p>
         </div>
       </div>
 
-      {/* Two-Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Sidebar (4 cols) */}
         <div className="lg:col-span-4 space-y-4 text-xs">
           <div className="bg-white rounded-xl border border-blue-200 p-4 shadow-sm">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center space-x-2 text-blue-700 font-bold">
                 <Award className="w-4 h-4" />
-                <span>{partner.programName}</span>
+                <span>{partner.programName || "Unassigned Program"}</span>
               </div>
-              <select
-                value={levelSelect || partner.qualifyingLevel}
-                onChange={(e) => handleSaveLevel(e.target.value)}
-                className="px-2 py-1 border border-blue-300 rounded text-xs font-semibold text-blue-700 bg-blue-50"
-              >
-                <option value="Silver Tier">Silver Tier</option>
-                <option value="Gold Tier">Gold Tier</option>
-                <option value="Platinum Elite">Platinum Elite</option>
-              </select>
+              {programLevelNames.length > 0 && (
+                <select
+                  value={levelSelect || partner.qualifyingLevel}
+                  onChange={(e) => handleSaveLevel(e.target.value)}
+                  className="px-2 py-1 border border-blue-300 rounded text-xs font-semibold text-blue-700 bg-blue-50"
+                >
+                  {programLevelNames.map((lvlName) => (
+                    <option key={lvlName} value={lvlName}>
+                      {lvlName}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
             <p className="text-slate-500">
               Qualifying level determines commission rewards &amp; portal
@@ -339,7 +383,9 @@ export default function PartnerDetailPage() {
                   />
                 </div>
                 <div>
-                  <label className="text-slate-500 block">Company Website</label>
+                  <label className="text-slate-500 block">
+                    Company Website
+                  </label>
                   <input
                     value={editFields.companyWebsite || ""}
                     onChange={(e) =>
@@ -352,7 +398,9 @@ export default function PartnerDetailPage() {
                   />
                 </div>
                 <div>
-                  <label className="text-slate-500 block">Company Address</label>
+                  <label className="text-slate-500 block">
+                    Company Address
+                  </label>
                   <input
                     value={editFields.companyAddress || ""}
                     onChange={(e) =>
@@ -369,27 +417,27 @@ export default function PartnerDetailPage() {
               <div className="grid grid-cols-2 gap-y-2.5 gap-x-2">
                 <span className="text-slate-500">Owner</span>
                 <span className="font-medium text-slate-900">
-                  {partner.owner}
+                  {partner.owner || "—"}
                 </span>
 
                 <span className="text-slate-500">Partner program</span>
                 <span className="font-medium text-blue-700">
-                  {partner.programName}
+                  {partner.programName || "—"}
                 </span>
 
                 <span className="text-slate-500">Partner type</span>
                 <span className="font-medium text-slate-900">
-                  {partner.partnerType}
+                  {partner.partnerType || "—"}
                 </span>
 
                 <span className="text-slate-500">Active since</span>
                 <span className="font-medium text-slate-900">
-                  {partner.activeSince}
+                  {partner.activeSince || "—"}
                 </span>
 
                 <span className="text-slate-500">Country</span>
                 <span className="font-medium text-slate-900">
-                  {partner.country}
+                  {partner.country || "—"}
                 </span>
 
                 <span className="text-slate-500">Currency / Language</span>
@@ -399,28 +447,31 @@ export default function PartnerDetailPage() {
 
                 <span className="text-slate-500">Prospection stage</span>
                 <span className="font-medium text-slate-900">
-                  {partner.prospectionStage}
+                  {partner.prospectionStage || "—"}
                 </span>
 
                 <span className="text-slate-500">Company Website</span>
                 <span className="font-medium text-blue-600 truncate">
-                  {partner.companyWebsite}
+                  {partner.companyWebsite || "—"}
                 </span>
 
                 <span className="text-slate-500">Company Address</span>
                 <span className="font-medium text-slate-900">
-                  {partner.companyAddress}
+                  {partner.companyAddress || "—"}
                 </span>
 
                 <span className="text-slate-500">Business Industry</span>
                 <span className="font-medium text-slate-900">
-                  {partner.industry}
+                  {partner.industry || "—"}
                 </span>
 
                 <span className="text-slate-500">Bank / SWIFT</span>
                 <span className="font-medium text-slate-900">
-                  {bankInfo.bankName || "DBS Corporate"} (
-                  {bankInfo.swiftCode || "DBSSSGSG"})
+                  {bankInfo.bankName
+                    ? `${bankInfo.bankName}${
+                        bankInfo.swiftCode ? ` (${bankInfo.swiftCode})` : ""
+                      }`
+                    : "Not provided"}
                 </span>
               </div>
             )}
@@ -431,15 +482,16 @@ export default function PartnerDetailPage() {
               Main contact
             </h3>
             <p className="font-bold text-slate-900">
-              {partner.contactFirstName} {partner.contactLastName}
+              {`${partner.contactFirstName || ""} ${
+                partner.contactLastName || ""
+              }`.trim() || "—"}
             </p>
-            <p className="text-slate-600">{partner.contactJobTitle}</p>
-            <p className="text-blue-600">{partner.contactEmail}</p>
-            <p className="text-slate-500">{partner.contactPhone}</p>
+            <p className="text-slate-600">{partner.contactJobTitle || "—"}</p>
+            <p className="text-blue-600">{partner.contactEmail || "—"}</p>
+            <p className="text-slate-500">{partner.contactPhone || "—"}</p>
           </div>
         </div>
 
-        {/* Right Tabbed Area (8 cols) */}
         <div className="lg:col-span-8 space-y-4">
           <div className="bg-white rounded-xl border border-slate-200 p-2 shadow-sm flex flex-wrap gap-1">
             {RIGHT_TABS.map((t) => (
@@ -463,10 +515,10 @@ export default function PartnerDetailPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="font-bold text-sm text-slate-900">
-                      Onboarding Pipeline: {partner.onboardingPipeline}
+                      Onboarding Pipeline: {partner.onboardingPipeline || "—"}
                     </h3>
                     <p className="text-slate-500">
-                      Current Stage: {partner.onboardingStage} (
+                      Current Stage: {partner.onboardingStage || "—"} (
                       {partner.onboardingStatus})
                     </p>
                   </div>
@@ -492,8 +544,8 @@ export default function PartnerDetailPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3 pt-2">
                   {[
-                    "Kickoff Welcome Call",
-                    "Book a Demo Account Training",
+                    "Kickoff",
+                    "Enablement",
                     "Technical Certification",
                     "Completed",
                   ].map((step, i) => (
@@ -541,13 +593,15 @@ export default function PartnerDetailPage() {
                   <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200">
                     <p className="text-slate-600">Sourced Revenue</p>
                     <p className="text-lg font-extrabold text-blue-700 mt-1">
-                      SGD {partner.sourcedRevenue365d.toLocaleString()}
+                      {baseCurrency}{" "}
+                      {Number(partner.sourcedRevenue365d || 0).toLocaleString()}
                     </p>
                   </div>
                   <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
                     <p className="text-slate-600">Influenced Revenue</p>
                     <p className="text-lg font-extrabold text-slate-900 mt-1">
-                      SGD {partner.influencedRev365d.toLocaleString()}
+                      {baseCurrency}{" "}
+                      {Number(partner.influencedRev365d || 0).toLocaleString()}
                     </p>
                   </div>
                   <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
@@ -613,17 +667,20 @@ export default function PartnerDetailPage() {
             {activeTab === "Customize" && (
               <div className="space-y-3 text-xs">
                 <h3 className="font-bold text-sm text-slate-900">
-                  Customize Partner Portal &amp; Commission Overrides
+                  Customize Partner Portal &amp; Personal Lead Form
                 </h3>
                 <p className="text-slate-600">
-                  Configure per-partner portal widget visibility, self-invoicing
-                  eligibility, and custom public lead form URL:{" "}
-                  <Link
-                    href={`/forms/lead/${partner.id}`}
-                    className="text-blue-600 font-semibold hover:underline"
-                  >
-                    /forms/lead/{partner.id} ↗
-                  </Link>
+                  Personal lead submission form link:{" "}
+                  {partner.leadFormToken ? (
+                    <Link
+                      href={`/forms/lead/${partner.leadFormToken}`}
+                      className="text-blue-600 font-semibold hover:underline"
+                    >
+                      /forms/lead/{partner.leadFormToken} ↗
+                    </Link>
+                  ) : (
+                    <span>Not generated</span>
+                  )}
                 </p>
               </div>
             )}
@@ -646,7 +703,8 @@ export default function PartnerDetailPage() {
                     </div>
                     <div className="flex items-center space-x-3">
                       <span className="font-bold">
-                        SGD {r.amountSgd.toLocaleString()}
+                        {baseCurrency}{" "}
+                        {Number(r.amountBase || 0).toLocaleString()}
                       </span>
                       <StatusBadge status={r.status} />
                     </div>
@@ -763,7 +821,7 @@ export default function PartnerDetailPage() {
                       required
                       value={memberName}
                       onChange={(e) => setMemberName(e.target.value)}
-                      placeholder="Jane Partner"
+                      placeholder="Jane Doe"
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                     />
                   </div>
@@ -776,7 +834,7 @@ export default function PartnerDetailPage() {
                       type="email"
                       value={memberEmail}
                       onChange={(e) => setMemberEmail(e.target.value)}
-                      placeholder="jane@partner.com"
+                      placeholder="jane@example.com"
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                     />
                   </div>

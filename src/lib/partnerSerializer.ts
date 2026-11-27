@@ -1,12 +1,12 @@
-import { normalizeRewardRule } from "./prmEngine";
+import { normalizeRewardRule, SUPPORTED_CURRENCIES } from "./prmEngine";
 
 /**
- * §15.2 Slice 2 & Slice 3: Explicit Partner-Facing Allowlist Serializers
+ * Explicit Partner-Facing Allowlist Serializers
  *
  * One serializer per partner-reachable object type.
  * - Never returns raw `metadataJson`, `awardedPartners`, email subjects, or admin configuration.
  * - Never leaks another partner's name, program, or level.
- * - For `settings`, returns only what the portal renders: branding (`accountName`, `primaryColor`, `logo`, `portalDomain`),
+ * - For `settings`, returns only what the portal renders: branding (`accountName`, `primaryColor`, `logoText`, `portalDomain`),
  *   `mainCurrency`, `payoutProviders`, `selfInvoicingEnabled`, and the partner's own `user_preferences`.
  */
 
@@ -67,7 +67,7 @@ export function serializeProgramForPartner(prog: any, partnerLevelName: string) 
       name: lvl.name,
       badgeColor: lvl.badgeColor,
       rewards: Array.isArray(lvl.rewards)
-        ? lvl.rewards.map(normalizeRewardRule)
+        ? lvl.rewards.map((r: unknown) => normalizeRewardRule(r))
         : [],
       benefits: lvl.benefits || [],
       requirements: lvl.requirements || [],
@@ -84,7 +84,6 @@ export function serializeProgramForPartner(prog: any, partnerLevelName: string) 
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function serializeLeadForPartner(l: any) {
-  // §4.3: Partner view omits internal Owner and Source-partner vs Assigned-partner split
   return {
     id: l.id,
     firstName: l.firstName,
@@ -119,7 +118,7 @@ export function serializeDealForPartner(d: any) {
     company: d.company,
     amount: d.amount,
     currency: d.currency,
-    amountSgd: d.amountSgd,
+    amountBase: d.amountBase,
     partnerName: d.partnerName,
     partnerId: d.partnerId,
     assignedContact: d.assignedContact,
@@ -150,7 +149,7 @@ export function serializeCustomerForPartner(c: any) {
     billingFrequency: c.billingFrequency,
     billingPeriod: c.billingPeriod,
     transactionsCount: c.transactionsCount,
-    revenuesSgd: c.revenuesSgd,
+    revenuesBase: c.revenuesBase,
     createdAt: c.createdAt,
   };
 }
@@ -162,7 +161,7 @@ export function serializeTransactionForPartner(t: any) {
     name: t.name,
     amount: t.amount,
     currency: t.currency,
-    amountSgd: t.amountSgd,
+    amountBase: t.amountBase,
     partnerName: t.partnerName,
     customerName: t.customerName,
     dealName: t.dealName,
@@ -181,7 +180,7 @@ export function serializeRewardForPartner(r: any) {
     type: r.type,
     amount: r.amount,
     currency: r.currency,
-    amountSgd: r.amountSgd,
+    amountBase: r.amountBase,
     fromActivity: r.fromActivity,
     fromRewardRule: r.fromRewardRule,
     status: r.status,
@@ -193,7 +192,6 @@ export function serializeRewardForPartner(r: any) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function serializePayoutForPartner(po: any) {
-  // §4.2: Partner-side list omits Invoice (invoiceRef)
   return {
     id: po.id,
     payoutNumber: po.payoutNumber,
@@ -201,7 +199,7 @@ export function serializePayoutForPartner(po: any) {
     partnerName: po.partnerName,
     amount: po.amount,
     currency: po.currency,
-    amountSgd: po.amountSgd,
+    amountBase: po.amountBase,
     periodFrom: po.periodFrom,
     periodTo: po.periodTo,
     rewardsCount: po.rewardsCount,
@@ -212,8 +210,12 @@ export function serializePayoutForPartner(po: any) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function serializeManageItemForPartner(item: any, partnerName: string, partnerProgramName: string) {
-  // Parse metadata safely on the server, NEVER return raw metadataJson, awardedPartners, or email subjects!
+export function serializeManageItemForPartner(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  item: any,
+  partnerName: string,
+  partnerProgramName: string
+) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let meta: Record<string, any> = {};
   try {
@@ -231,10 +233,9 @@ export function serializeManageItemForPartner(item: any, partnerName: string, pa
       status: item.status,
       folder: meta.folder || "General Collateral",
       fileType: meta.fileType || "PDF",
-      fileUrl:
-        meta.fileUrl || "/api/files/R-PRM_2026_Enterprise_Pitch_Deck.pdf",
+      fileUrl: meta.fileUrl || "",
       fileName: meta.fileName || item.name,
-      size: meta.size || "2.4 MB",
+      size: meta.size || "",
     };
   }
 
@@ -250,7 +251,9 @@ export function serializeManageItemForPartner(item: any, partnerName: string, pa
       title: item.name,
       subtitle: cleanSubtitle,
       body: meta.body || cleanSubtitle,
-      date: meta.publishedDate || "2026-11-15",
+      date:
+        meta.publishedDate ||
+        (item.createdAt ? new Date(item.createdAt).toISOString().slice(0, 10) : ""),
       status: item.status,
     };
   }
@@ -273,7 +276,6 @@ export function serializeManageItemForPartner(item: any, partnerName: string, pa
     };
   }
 
-  // help_articles
   return {
     id: item.id,
     category: "help_articles",
@@ -295,7 +297,7 @@ export function serializeBusinessPlanForPartner(bp: any) {
     startDate: bp.startDate,
     endDate: bp.endDate,
     achievedPct: bp.achievedPct,
-    targetRevSgd: bp.targetRevSgd,
+    targetRevBase: bp.targetRevBase,
     createdAt: bp.createdAt,
   };
 }
@@ -326,7 +328,7 @@ export function serializeTrackingLinkForPartner(lnk: any) {
     leadsCount: lnk.leadsCount,
     customersCount: lnk.customersCount,
     transactionsCount: lnk.transactionsCount,
-    revenuesSgd: lnk.revenuesSgd,
+    revenuesBase: lnk.revenuesBase,
     createdAt: lnk.createdAt,
   };
 }
@@ -360,16 +362,6 @@ export function serializeNoteForPartner(n: any) {
   };
 }
 
-/**
- * §15.2 Slice 3: Partner-Facing Settings Allowlist
- * Returns ONLY what the portal renders:
- * - branding (accountName, primaryColor, logo, portalDomain)
- * - mainCurrency
- * - payoutProviders
- * - selfInvoicingEnabled
- * - partner's own user_preferences
- * Strips SSO entity ID/callback, MFA policy, validation strategy, conflict detection, deal expiry, payout schedule & threshold.
- */
 export function serializeSettingsForPartner(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   settingsMap: Record<string, any>,
@@ -380,14 +372,15 @@ export function serializeSettingsForPartner(
   const acct = settingsMap.account_settings || {};
   return {
     account_settings: {
-      accountName: acct.accountName || "R-Cloud Enterprise PRM",
+      accountName: acct.accountName || "Workspace",
       primaryColor: acct.primaryColor || "#2563EB",
-      logo: acct.logo || "R",
-      portalDomain: acct.portalDomain || "https://partners.r-cloud.example.com",
-      mainCurrency: acct.mainCurrency || "SGD",
+      logo: acct.logoText || acct.logo || "R",
+      logoText: acct.logoText || acct.logo || "R",
+      portalDomain: acct.portalDomain || "",
+      mainCurrency: acct.mainCurrency || SUPPORTED_CURRENCIES[0],
       payoutProviders: Array.isArray(acct.payoutProviders)
         ? acct.payoutProviders
-        : ["Wise", "Stripe", "PayPal", "Payoneer"],
+        : ["Manual"],
       selfInvoicingEnabled: Boolean(acct.selfInvoicingEnabled ?? true),
     },
     user_preferences: {
@@ -397,7 +390,7 @@ export function serializeSettingsForPartner(
       jobTitle: partner?.contactJobTitle || "Partner Member",
       phone: partner?.contactPhone || "",
       language: partner?.language || "English",
-      timezone: "Asia/Singapore (GMT+08:00)",
+      timezone: acct.timezone || "UTC",
     },
   };
 }

@@ -4,20 +4,55 @@ import {
   resolvePartnerByLeadFormToken,
   generateRandomLeadFormToken,
   resolveExplicitProgramAndPipeline,
+  SUPPORTED_CURRENCIES,
 } from "@/lib/prmEngine";
 import { checkRateLimitKey, recordAuthFailure } from "@/lib/authSession";
 import { encryptBankDetails } from "@/lib/connectors";
 
 export const dynamic = "force-dynamic";
 
+async function loadPublicWorkspaceMeta() {
+  const row = await prisma.appSetting.findUnique({
+    where: { key: "account_settings" },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let acct: Record<string, any> = {};
+  if (row?.valueJson) {
+    try {
+      acct = JSON.parse(row.valueJson);
+    } catch {
+      acct = {};
+    }
+  }
+  const accountName = String(acct.accountName || "Workspace");
+  const rawConsent = String(
+    acct.leadConsentText ||
+      "I confirm I have obtained permission from this prospect to share their business contact details with {{workspace.name}}."
+  );
+  return {
+    accountName,
+    logoText: String(acct.logoText || accountName.charAt(0) || "R")
+      .slice(0, 2)
+      .toUpperCase(),
+    primaryColor: String(acct.primaryColor || "#2563EB"),
+    mainCurrency: String(acct.mainCurrency || SUPPORTED_CURRENCIES[0]),
+    leadConsentText: rawConsent.split("{{workspace.name}}").join(accountName),
+    leadConsentTermsLabel: String(
+      acct.leadConsentTermsLabel || "Terms & Privacy Policy"
+    ),
+    leadConsentTermsUrl: String(acct.leadConsentTermsUrl || ""),
+  };
+}
+
 // Public, unauthenticated endpoint ONLY for:
 // 1. Validating an unguessable partner lead form token (/forms/lead/[token])
 // 2. Validating a program ID for public application (/forms/apply/[programId])
-// 3. Submitting a public referral lead (requires Eber General Terms 7.2 consent) or partner application
+// 3. Submitting a public referral lead (requires workspace consent checkbox) or partner application
 export async function GET(req: NextRequest) {
   try {
     const leadToken = req.nextUrl.searchParams.get("leadToken");
     const programId = req.nextUrl.searchParams.get("programId");
+    const workspace = await loadPublicWorkspaceMeta();
 
     if (leadToken) {
       const partners = await prisma.partner.findMany();
@@ -28,6 +63,7 @@ export async function GET(req: NextRequest) {
             valid: false,
             lookupStatus: "not_found",
             reason: "This link isn't valid",
+            workspace,
           },
           { status: 404 }
         );
@@ -35,6 +71,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         valid: true,
         lookupStatus: "found",
+        workspace,
         partner: {
           id: matched.id,
           name: matched.name,
@@ -54,6 +91,7 @@ export async function GET(req: NextRequest) {
             valid: false,
             lookupStatus: "not_found",
             reason: "Program not found",
+            workspace,
           },
           { status: 404 }
         );
@@ -61,12 +99,18 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         valid: true,
         lookupStatus: "found",
-        program: { id: prog.id, name: prog.name },
+        workspace,
+        program: {
+          id: prog.id,
+          name: prog.name,
+          termsRequired: prog.termsRequired,
+          termsUrl: prog.termsUrl,
+        },
       });
     }
 
     return NextResponse.json(
-      { valid: false, reason: "Missing query parameter" },
+      { valid: false, reason: "Missing query parameter", workspace },
       { status: 400 }
     );
   } catch (error) {
@@ -95,14 +139,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { formType } = body;
     const payload = body.payload || body.data || {};
+    const workspace = await loadPublicWorkspaceMeta();
 
     if (formType === "public_lead") {
-      if (!payload?.consentTerms72) {
+      if (!payload?.consentConfirmed && !payload?.consentTerms72) {
         await recordAuthFailure(rateKey);
         return NextResponse.json(
           {
             error:
-              "Prospect data consent (Eber General Terms 7.2) is required before submitting a lead.",
+              "Prospect data consent is required before submitting a lead.",
           },
           { status: 400 }
         );
@@ -119,35 +164,38 @@ export async function POST(req: NextRequest) {
 
       const lead = await prisma.lead.create({
         data: {
-          firstName: payload.firstName,
-          lastName: payload.lastName,
-          company: payload.company,
-          jobTitle: payload.jobTitle || "Decision Maker",
-          email: payload.email,
-          phone: payload.phone || "",
-          country: payload.country || "Singapore",
-          retailBrand: payload.retailBrand || payload.company,
-          outletsCount: Number(payload.outletsCount) || 1,
-          posSolution: payload.posSolution || "CloudPOS Pro",
-          remarks: `${payload.remarks || ""} [Consent: Eber General Terms 7.2 verified]`.trim(),
+          firstName: String(payload.firstName || "").trim(),
+          lastName: String(payload.lastName || "").trim(),
+          company: String(payload.company || "").trim(),
+          jobTitle: String(payload.jobTitle || "").trim(),
+          email: String(payload.email || "").trim(),
+          phone: String(payload.phone || "").trim(),
+          country: String(payload.country || "").trim(),
+          retailBrand: String(payload.retailBrand || payload.company || "").trim(),
+          outletsCount: Number(payload.outletsCount) || 0,
+          website: String(payload.website || "").trim(),
+          posSolution: String(payload.posSolution || "").trim(),
+          remarks: `${payload.remarks || ""} [Consent verified: ${workspace.leadConsentTermsLabel}]`.trim(),
           status: "Pending",
+          ownerId: matched.ownerId || null,
+          owner: matched.owner || "",
           source: "Public Partner Lead Form",
           sourcePartnerId: matched.id,
           sourcePartnerName: matched.name,
           assignedPartner: matched.name,
-          assignedContact: `${matched.contactFirstName} ${matched.contactLastName}`,
+          assignedContact: `${matched.contactFirstName} ${matched.contactLastName}`.trim(),
           assignedDate: new Date().toISOString().slice(0, 10),
         },
       });
 
       await prisma.auditLog.create({
         data: {
-          actor: payload.email,
+          actor: lead.email,
           actorRole: "Public Lead Form",
           action: "CREATE",
           objectType: "Lead",
           objectId: lead.id,
-          summary: `Public referral lead "${lead.firstName} ${lead.lastName}" (${lead.company}) submitted via token for ${matched.name} with Eber General Terms 7.2 consent`,
+          summary: `Public referral lead "${lead.firstName} ${lead.lastName}" (${lead.company}) submitted via token for ${matched.name} with verified consent`,
         },
       });
 
@@ -176,18 +224,19 @@ export async function POST(req: NextRequest) {
 
       const partner = await prisma.partner.create({
         data: {
-          name: payload.companyName,
+          name: String(payload.companyName || payload.name || "").trim(),
           programId: resolved.programId,
           programName: resolved.programName,
           onboardingPipeline: resolved.onboardingPipeline,
-          country: payload.country || "Singapore",
-          contactFirstName: payload.contactFirstName,
-          contactLastName: payload.contactLastName,
-          contactEmail: payload.contactEmail,
-          contactJobTitle: payload.contactJobTitle || "Partner Lead",
-          contactPhone: payload.companyPhone || "",
-          companyWebsite: payload.companyWebsite || "",
-          industry: payload.industry || "Technology",
+          country: String(payload.country || "").trim(),
+          currency: String(payload.currency || workspace.mainCurrency).trim(),
+          contactFirstName: String(payload.contactFirstName || "").trim(),
+          contactLastName: String(payload.contactLastName || "").trim(),
+          contactEmail: String(payload.contactEmail || "").trim(),
+          contactJobTitle: String(payload.contactJobTitle || "").trim(),
+          contactPhone: String(payload.companyPhone || "").trim(),
+          companyWebsite: String(payload.companyWebsite || "").trim(),
+          industry: String(payload.industry || "").trim(),
           status: "Pending",
           onboardingStatus: "Not started",
           prospectionStage: "New",
@@ -195,12 +244,13 @@ export async function POST(req: NextRequest) {
           activeSince: new Date().toISOString().slice(0, 10),
           leadFormTokenHash: lf.tokenHash,
           leadFormTokenCipher: encryptBankDetails(lf.rawToken),
+          bankDetailsJson: encryptBankDetails("{}"),
         },
       });
 
       await prisma.auditLog.create({
         data: {
-          actor: payload.contactEmail,
+          actor: partner.contactEmail,
           actorRole: "Public Applicant",
           action: "CREATE",
           objectType: "PartnerApplication",

@@ -1,19 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { StatusBadge, DEAL_STAGES_10 } from "@/components/SharedEngines";
-import {
-  Check,
-  Plus,
-  Shield,
-  Code2,
-  Database,
-  History,
-  AlertTriangle,
-} from "lucide-react";
+import { AccountSystemTabs } from "@/components/AccountSystemTabs";
+import { CURRENCY_LABELS, SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
+import { Shield } from "lucide-react";
 
 const ACCOUNT_CATEGORIES = [
   { id: "defaults", label: "Account defaults" },
@@ -46,7 +40,8 @@ const PROPERTY_OBJECTS = [
 export default function AccountRootPage() {
   const params = useParams();
   const initialTab = String(params?.tab || "defaults");
-  const { settings, manageItems, mutate, showToast } = usePrm();
+  const { settings, manageItems, session, auditLogs, mutate, refresh, showToast } =
+    usePrm();
   const [activeTab, setActiveTab] = useState(initialTab);
   const [propObject, setPropObject] = useState("Leads");
   const [newPropName, setNewPropName] = useState("");
@@ -55,11 +50,15 @@ export default function AccountRootPage() {
   const [createdTokenPlaintext, setCreatedTokenPlaintext] = useState<
     string | null
   >(null);
-
-  // §1.4 & §5.2 Data Safety: Typed confirmation for Reset data
   const [resetConfirmationText, setResetConfirmationText] = useState("");
 
-  // Distinct Module Settings State (Fixes D7)
+  // Enrolment secret shown ONLY during interactive enrolment (§3.5.1)
+  const [mfaEnrollmentResult, setMfaEnrollmentResult] = useState<{
+    secret: string;
+    otpauthUri: string;
+    recoveryCodes: string[];
+  } | null>(null);
+
   const [partnerTypes, setPartnerTypes] = useState([
     "Reseller",
     "System Integrator",
@@ -68,37 +67,41 @@ export default function AccountRootPage() {
   ]);
   const [newPartnerType, setNewPartnerType] = useState("");
 
-  const acct = settings.account_settings || {
-    accountName: "R-Cloud Enterprise PRM",
-    timezone: "Asia/Singapore (GMT+08:00)",
-    mainCurrency: "SGD",
-    multiCurrency: true,
-    portalDomain: "https://partners.r-cloud.example.com",
-    primaryColor: "#2563EB",
-    directorySubdomain: "r-cloud",
-    dealExpirationDays: 90,
-    dealReminderDays: 14,
-    dealConflictDetection:
-      "Warn & flag duplicate Deals across Customer company or contact email domain",
-    allowDealResubmission: true,
-    autoAssociateCustomers: true,
-    dealValidationStrategy: "Anyone (Partner Owner or Administrator)",
-    acknowledgeDealTemplate: "Deal Registration Validated",
-    dealCardFields: [
-      "Deal Name",
-      "Partner Name",
-      "Amount & Currency",
-      "Probability (%)",
-      "Expected Close Date",
-      "Owner",
-      "Conflict Flag",
-    ],
-    autoPayoutEnabled: true,
-    autoPayoutSchedule: "Every month on the 1st day",
-    autoPayoutThresholdSgd: 250,
-  };
+  const acct = settings.account_settings || {};
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
 
-  // Controlled Deal & Payout Settings State (hydrated from settings.account_settings)
+  const [accountName, setAccountName] = useState(acct.accountName || "");
+  const [timezone, setTimezone] = useState(acct.timezone || "UTC");
+  const [mainCurrency, setMainCurrency] = useState(baseCurrency);
+  const [defaultOwnerName, setDefaultOwnerName] = useState(
+    acct.defaultOwnerName || ""
+  );
+  const [logoText, setLogoText] = useState(
+    acct.logoText || (acct.accountName ? String(acct.accountName).charAt(0).toUpperCase() : "R")
+  );
+  const [primaryColor, setPrimaryColor] = useState(
+    acct.primaryColor || "#2563EB"
+  );
+  const [portalDomain, setPortalDomain] = useState(acct.portalDomain || "");
+  const [directorySubdomain, setDirectorySubdomain] = useState(
+    acct.directorySubdomain || ""
+  );
+  const [requireMfaCoworkers, setRequireMfaCoworkers] = useState(
+    Boolean(acct.requireMfaCoworkers)
+  );
+  const [requireMfaPartners, setRequireMfaPartners] = useState(
+    Boolean(acct.requireMfaPartners)
+  );
+  const [leadConsentText, setLeadConsentText] = useState(
+    acct.leadConsentText ||
+      "I confirm I have obtained permission from this prospect to share their business contact details with {{workspace.name}}."
+  );
+  const [leadConsentTermsLabel, setLeadConsentTermsLabel] = useState(
+    acct.leadConsentTermsLabel || "Terms & Privacy Policy"
+  );
+  const [leadConsentTermsUrl, setLeadConsentTermsUrl] = useState(
+    acct.leadConsentTermsUrl || ""
+  );
   const [dealConflictDetection, setDealConflictDetection] = useState(
     acct.dealConflictDetection ||
       "Warn & flag duplicate Deals across Customer company or contact email domain"
@@ -121,18 +124,47 @@ export default function AccountRootPage() {
       "Anyone (Partner Owner or Administrator)"
   );
   const [acknowledgeDealTemplate, setAcknowledgeDealTemplate] = useState(
-    acct.acknowledgeDealTemplate || "Deal Registration Validated"
+    acct.acknowledgeDealTemplate || ""
   );
   const [autoPayoutSchedule, setAutoPayoutSchedule] = useState(
     acct.autoPayoutSchedule || "Every month on the 1st day"
   );
-  const [autoPayoutThresholdSgd, setAutoPayoutThresholdSgd] = useState(
-    Number(acct.autoPayoutThresholdSgd ?? 250)
+  const [autoPayoutThresholdBase, setAutoPayoutThresholdBase] = useState(
+    Number(acct.autoPayoutThresholdBase ?? 250)
+  );
+  const [selfInvoicingEnabled, setSelfInvoicingEnabled] = useState(
+    Boolean(acct.selfInvoicingEnabled ?? true)
+  );
+  const [legalEntityName, setLegalEntityName] = useState(
+    acct.legalEntityName || ""
+  );
+  const [taxId, setTaxId] = useState(acct.taxId || "");
+  const [billingAddress, setBillingAddress] = useState(
+    acct.billingAddress || ""
   );
 
-  React.useEffect(() => {
+  useEffect(() => {
     const s = settings.account_settings;
     if (!s) return;
+    if (s.accountName !== undefined) setAccountName(s.accountName);
+    if (s.timezone !== undefined) setTimezone(s.timezone);
+    if (s.mainCurrency !== undefined) setMainCurrency(s.mainCurrency);
+    if (s.defaultOwnerName !== undefined)
+      setDefaultOwnerName(s.defaultOwnerName);
+    if (s.logoText !== undefined) setLogoText(s.logoText);
+    if (s.primaryColor !== undefined) setPrimaryColor(s.primaryColor);
+    if (s.portalDomain !== undefined) setPortalDomain(s.portalDomain);
+    if (s.directorySubdomain !== undefined)
+      setDirectorySubdomain(s.directorySubdomain);
+    if (s.requireMfaCoworkers !== undefined)
+      setRequireMfaCoworkers(Boolean(s.requireMfaCoworkers));
+    if (s.requireMfaPartners !== undefined)
+      setRequireMfaPartners(Boolean(s.requireMfaPartners));
+    if (s.leadConsentText !== undefined) setLeadConsentText(s.leadConsentText);
+    if (s.leadConsentTermsLabel !== undefined)
+      setLeadConsentTermsLabel(s.leadConsentTermsLabel);
+    if (s.leadConsentTermsUrl !== undefined)
+      setLeadConsentTermsUrl(s.leadConsentTermsUrl);
     if (s.dealConflictDetection)
       setDealConflictDetection(s.dealConflictDetection);
     if (s.dealExpirationDays !== undefined)
@@ -147,11 +179,16 @@ export default function AccountRootPage() {
       setDealValidationStrategy(
         s.dealValidationStrategy || s.validationStrategy
       );
-    if (s.acknowledgeDealTemplate)
+    if (s.acknowledgeDealTemplate !== undefined)
       setAcknowledgeDealTemplate(s.acknowledgeDealTemplate);
     if (s.autoPayoutSchedule) setAutoPayoutSchedule(s.autoPayoutSchedule);
-    if (s.autoPayoutThresholdSgd !== undefined)
-      setAutoPayoutThresholdSgd(Number(s.autoPayoutThresholdSgd));
+    if (s.autoPayoutThresholdBase !== undefined)
+      setAutoPayoutThresholdBase(Number(s.autoPayoutThresholdBase));
+    if (s.selfInvoicingEnabled !== undefined)
+      setSelfInvoicingEnabled(Boolean(s.selfInvoicingEnabled));
+    if (s.legalEntityName !== undefined) setLegalEntityName(s.legalEntityName);
+    if (s.taxId !== undefined) setTaxId(s.taxId);
+    if (s.billingAddress !== undefined) setBillingAddress(s.billingAddress);
   }, [settings.account_settings]);
 
   const customProps = manageItems.filter(
@@ -162,9 +199,6 @@ export default function AccountRootPage() {
     (m) => m.category === "email_templates"
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const auditLogs: any[] = (usePrm() as any).auditLogs || [];
-
   const handleSaveSettings = async (msg = "Settings saved to database!") => {
     await mutate(
       "SAVE_SETTING",
@@ -172,6 +206,19 @@ export default function AccountRootPage() {
         key: "account_settings",
         value: {
           ...acct,
+          accountName,
+          timezone,
+          mainCurrency,
+          defaultOwnerName,
+          logoText,
+          primaryColor,
+          portalDomain,
+          directorySubdomain,
+          requireMfaCoworkers,
+          requireMfaPartners,
+          leadConsentText,
+          leadConsentTermsLabel,
+          leadConsentTermsUrl,
           dealConflictDetection,
           dealExpirationDays,
           dealReminderDays,
@@ -180,11 +227,33 @@ export default function AccountRootPage() {
           dealValidationStrategy,
           acknowledgeDealTemplate,
           autoPayoutSchedule,
-          autoPayoutThresholdSgd,
+          autoPayoutThresholdBase,
+          selfInvoicingEnabled,
+          legalEntityName,
+          taxId,
+          billingAddress,
         },
       },
       msg
     );
+  };
+
+  const handleEnrollMfa = async () => {
+    const res = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "enroll_mfa" }),
+    });
+    const json = await res.json();
+    if (res.ok && json.enrollment) {
+      setMfaEnrollmentResult(json.enrollment);
+      await refresh();
+      showToast(
+        "Authenticator enrolled! Copy your secret and recovery codes now."
+      );
+    } else {
+      showToast(json.error || "MFA enrolment failed");
+    }
   };
 
   const handleAddProperty = async (e: React.FormEvent) => {
@@ -210,7 +279,9 @@ export default function AccountRootPage() {
     const rawSecret = `rprm_live_${Math.random()
       .toString(36)
       .slice(2, 12)}_${Date.now().toString(36)}`;
-    const maskedHash = `${rawSecret.slice(0, 12)}...${rawSecret.slice(-4)} (SHA-256 Hashed)`;
+    const maskedHash = `${rawSecret.slice(0, 12)}...${rawSecret.slice(
+      -4
+    )} (SHA-256 Hashed)`;
     setCreatedTokenPlaintext(rawSecret);
 
     await mutate(
@@ -218,7 +289,9 @@ export default function AccountRootPage() {
       {
         category: "api_tokens",
         name: newTokenName,
-        subtitle: `${maskedHash} · Created just now by Alex Morgan · Last used: Never`,
+        subtitle: `${maskedHash} · Created by ${
+          session?.name || session?.email || "Administrator"
+        } · Last used: Never`,
         status: "Active",
         metadata: { maskedHash },
       },
@@ -227,18 +300,23 @@ export default function AccountRootPage() {
     setNewTokenName("");
   };
 
+  const isUserMfaEnrolled = Boolean(
+    session?.mfaEnrolled || mfaEnrollmentResult
+  );
+  const currentOrigin =
+    typeof window !== "undefined" ? window.location.origin : portalDomain || "";
+
   return (
     <div className="max-w-[1440px] mx-auto px-6 py-6">
       <div className="mb-5">
         <h1 className="text-xl font-bold text-slate-900">Account Settings</h1>
         <p className="text-xs text-slate-500">
-          Workspace configuration tabs across Partner, Lead, Deal,
-          Payout, Security, Custom Properties, and Audit Trail
+          Workspace configuration tabs across Partner, Lead, Deal, Payout,
+          Security, Custom Properties, and Audit Trail
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Sidebar */}
         <div className="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-2.5 shadow-sm space-y-1 h-fit">
           {ACCOUNT_CATEGORIES.map((cat) => (
             <button
@@ -255,7 +333,6 @@ export default function AccountRootPage() {
           ))}
         </div>
 
-        {/* Content */}
         <div className="lg:col-span-9 bg-white rounded-xl border border-slate-200 p-6 shadow-sm text-xs space-y-5">
           {/* 1. ACCOUNT DEFAULTS */}
           {activeTab === "defaults" && (
@@ -269,7 +346,9 @@ export default function AccountRootPage() {
                     Account name
                   </label>
                   <input
-                    defaultValue={acct.accountName}
+                    value={accountName}
+                    onChange={(e) => setAccountName(e.target.value)}
+                    placeholder="Acme Ltd"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -278,7 +357,9 @@ export default function AccountRootPage() {
                     Timezone
                   </label>
                   <input
-                    defaultValue={acct.timezone}
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    placeholder="UTC"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
@@ -287,13 +368,49 @@ export default function AccountRootPage() {
                     Main currency (Base reporting currency)
                   </label>
                   <select
-                    defaultValue={acct.mainCurrency}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                    value={mainCurrency}
+                    onChange={(e) => setMainCurrency(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
                   >
-                    <option value="SGD">Singapore Dollar (SGD)</option>
-                    <option value="USD">US Dollar (USD)</option>
-                    <option value="EUR">Euro (EUR)</option>
+                    {SUPPORTED_CURRENCIES.map((code) => (
+                      <option key={code} value={code}>
+                        {CURRENCY_LABELS[code] || code} ({code})
+                      </option>
+                    ))}
                   </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Default workspace owner (for unassigned records/tasks)
+                  </label>
+                  <input
+                    value={defaultOwnerName}
+                    onChange={(e) => setDefaultOwnerName(e.target.value)}
+                    placeholder="Leave empty to flag unassigned tasks"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Legal entity name (for invoices)
+                  </label>
+                  <input
+                    value={legalEntityName}
+                    onChange={(e) => setLegalEntityName(e.target.value)}
+                    placeholder="Acme Enterprise Ltd"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Billing address (for invoices)
+                  </label>
+                  <input
+                    value={billingAddress}
+                    onChange={(e) => setBillingAddress(e.target.value)}
+                    placeholder="Street, City, Postal Code"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
                 </div>
               </div>
               <label className="flex items-center space-x-2 pt-2">
@@ -304,13 +421,11 @@ export default function AccountRootPage() {
                 />
                 <span className="font-medium text-slate-800">
                   Track leads and deals in multiple currencies with dated FX
-                  rates (SGD, USD, EUR, MYR)
+                  rates (Base: {mainCurrency})
                 </span>
               </label>
               <button
-                onClick={() =>
-                  handleSaveSettings("Account defaults saved!")
-                }
+                onClick={() => handleSaveSettings("Account defaults saved!")}
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold"
               >
                 Save Account Defaults
@@ -327,29 +442,50 @@ export default function AccountRootPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <p className="font-bold text-slate-900">
-                    Company logo (rectangular &amp; square) + Favicon
+                    Emblem monogram &amp; Portal title
                   </p>
-                  <div className="w-12 h-12 rounded-xl bg-blue-600 text-white font-extrabold text-2xl flex items-center justify-center">
-                    R
+                  <div className="flex items-center space-x-3">
+                    <div
+                      style={{ backgroundColor: primaryColor }}
+                      className="w-12 h-12 rounded-xl text-white font-extrabold text-2xl flex items-center justify-center"
+                    >
+                      {logoText}
+                    </div>
+                    <input
+                      maxLength={2}
+                      value={logoText}
+                      onChange={(e) =>
+                        setLogoText(e.target.value.toUpperCase())
+                      }
+                      className="w-20 px-3 py-1.5 border border-slate-300 rounded-lg font-bold text-center"
+                    />
                   </div>
                   <p className="text-slate-500">
-                    Active Blue &quot;R&quot; Brand Emblem on /p Partner Portal
+                    Active emblem on <code>/p</code> Partner Portal for{" "}
+                    {accountName || "this workspace"}
                   </p>
                 </div>
                 <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <p className="font-bold text-slate-900">
-                    Primary colour &amp; Sign-in background
+                    Primary colour &amp; Portal domain
                   </p>
                   <div className="flex items-center space-x-2">
-                    <div className="w-8 h-8 rounded bg-blue-600 border border-blue-700" />
+                    <div
+                      style={{ backgroundColor: primaryColor }}
+                      className="w-8 h-8 rounded border border-slate-300"
+                    />
                     <input
-                      defaultValue="#2563EB"
+                      value={primaryColor}
+                      onChange={(e) => setPrimaryColor(e.target.value)}
                       className="px-3 py-1.5 border border-slate-300 rounded-lg font-mono"
                     />
                   </div>
-                  <p className="text-slate-500">
-                    Portal Domain: https://partners.r-cloud.co
-                  </p>
+                  <input
+                    value={portalDomain}
+                    onChange={(e) => setPortalDomain(e.target.value)}
+                    placeholder="https://partners.example.com"
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg"
+                  />
                 </div>
               </div>
               <button
@@ -367,26 +503,26 @@ export default function AccountRootPage() {
           {activeTab === "directories" && (
             <div className="space-y-4">
               <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-2">
-                Directories (Add-on)
+                Partner Directories
               </h2>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Partner directories subdomain
+                  Partner directory slug
                 </label>
                 <div className="flex items-center space-x-2">
-                  <span className="text-slate-500">https://</span>
                   <input
-                    defaultValue="r-cloud"
+                    value={directorySubdomain}
+                    onChange={(e) => setDirectorySubdomain(e.target.value)}
+                    placeholder="partner-directory"
                     className="px-3 py-2 border border-slate-300 rounded-lg"
                   />
-                  <span className="text-slate-500">.directory.r-prm.com</span>
                 </div>
               </div>
               <button
-                onClick={() => handleSaveSettings("Directory subdomain saved!")}
+                onClick={() => handleSaveSettings("Directory slug saved!")}
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold"
               >
-                Save Subdomain
+                Save Directory Settings
               </button>
             </div>
           )}
@@ -398,7 +534,7 @@ export default function AccountRootPage() {
                 <div className="flex items-center space-x-2">
                   <Shield className="w-4 h-4 text-blue-600" />
                   <h2 className="text-base font-bold text-slate-900">
-                    Security — Authentication, TOTP MFA &amp; Single Sign-On (SAML 2.0)
+                    Security — Authentication, TOTP MFA &amp; Single Sign-On
                   </h2>
                 </div>
                 <div className="flex space-x-2">
@@ -416,60 +552,92 @@ export default function AccountRootPage() {
                   </Link>
                 </div>
               </div>
+
               <div className="space-y-2">
                 <label className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200">
                   <span className="font-semibold">
                     Require Authenticator-App MFA (TOTP) for my coworkers
                   </span>
-                  <input type="checkbox" defaultChecked />
+                  <input
+                    type="checkbox"
+                    checked={requireMfaCoworkers}
+                    onChange={(e) => setRequireMfaCoworkers(e.target.checked)}
+                  />
                 </label>
                 <label className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200">
                   <span className="font-semibold">
                     Require Authenticator-App MFA (TOTP) for partner users
                   </span>
-                  <input type="checkbox" />
+                  <input
+                    type="checkbox"
+                    checked={requireMfaPartners}
+                    onChange={(e) => setRequireMfaPartners(e.target.checked)}
+                  />
                 </label>
               </div>
 
-              {/* Authenticator App (TOTP) & Recovery Codes Card */}
+              {/* Signed-in User Real MFA Status & Enrolment (§3.5.1) */}
               <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h3 className="font-bold text-slate-900">
-                      Authenticator App (TOTP RFC 6238) &amp; Recovery Codes
+                      Your Account Authenticator Status (
+                      {session?.email || "Signed-in User"})
                     </h3>
                     <p className="text-slate-600">
-                      Verify 6-digit Time-Based One-Time Passcodes from Google Authenticator, 1Password, or Authy, with one-time emergency recovery codes.
+                      {isUserMfaEnrolled
+                        ? "TOTP authenticator is enrolled on your account. Secrets are never displayed outside active enrolment."
+                        : "No authenticator app is currently enrolled on your account."}
                     </p>
                   </div>
-                  <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[10px]">
-                    TOTP Active
-                  </span>
+                  <div className="flex items-center space-x-2">
+                    <span
+                      className={`px-2.5 py-1 rounded-full font-bold text-[10px] ${
+                        isUserMfaEnrolled
+                          ? "bg-emerald-100 text-emerald-800"
+                          : "bg-slate-200 text-slate-700"
+                      }`}
+                    >
+                      {isUserMfaEnrolled ? "TOTP Active" : "Not Enrolled"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleEnrollMfa}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                    >
+                      {isUserMfaEnrolled
+                        ? "Rotate Authenticator"
+                        : "Enrol Authenticator"}
+                    </button>
+                  </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="p-3 rounded-lg bg-white border border-slate-200 space-y-1">
-                    <span className="text-[10px] font-bold uppercase text-slate-500">
-                      Provisioned TOTP Base32 Secret
-                    </span>
-                    <p className="font-mono font-bold text-slate-900 select-all">
-                      JBSWY3DPEHPK3PXP
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      Issuer: R-PRM Enterprise · Algorithm: HMAC-SHA1 · 30s step
-                    </p>
-                  </div>
-                  <div className="p-3 rounded-lg bg-white border border-slate-200 space-y-1">
-                    <span className="text-[10px] font-bold uppercase text-slate-500">
-                      Emergency Recovery Codes (Single-Use)
-                    </span>
-                    <div className="grid grid-cols-2 gap-1 font-mono text-[11px] text-slate-800">
-                      <span>RPRM-8821-904A</span>
-                      <span>RPRM-3319-77BC</span>
-                      <span>RPRM-5502-19DE</span>
-                      <span>RPRM-9140-62FA</span>
+
+                {mfaEnrollmentResult && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-blue-200">
+                    <div className="p-3 rounded-lg bg-white border border-slate-200 space-y-1">
+                      <span className="text-[10px] font-bold uppercase text-emerald-700">
+                        New TOTP Secret (Displayed Once During Enrolment)
+                      </span>
+                      <p className="font-mono font-bold text-slate-900 select-all">
+                        {mfaEnrollmentResult.secret}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Issuer: {accountName || "R-PRM"} · Algorithm: HMAC-SHA1
+                        · 30s step
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white border border-slate-200 space-y-1">
+                      <span className="text-[10px] font-bold uppercase text-emerald-700">
+                        Emergency Recovery Codes (Single-Use)
+                      </span>
+                      <div className="grid grid-cols-2 gap-1 font-mono text-[11px] text-slate-800">
+                        {mfaEnrollmentResult.recoveryCodes.map((code) => (
+                          <span key={code}>{code}</span>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
@@ -479,7 +647,7 @@ export default function AccountRootPage() {
                   </label>
                   <input
                     readOnly
-                    value="https://app.r-prm.example.com/saml/metadata"
+                    value={currentOrigin ? `${currentOrigin}/saml/metadata` : "/saml/metadata"}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-50"
                   />
                 </div>
@@ -489,7 +657,7 @@ export default function AccountRootPage() {
                   </label>
                   <input
                     readOnly
-                    value="https://app.r-prm.example.com/saml/acs"
+                    value={currentOrigin ? `${currentOrigin}/saml/acs` : "/saml/acs"}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-50"
                   />
                 </div>
@@ -505,7 +673,7 @@ export default function AccountRootPage() {
             </div>
           )}
 
-          {/* 5. PARTNER SETTINGS (Distinct Tab — Fixes D7) */}
+          {/* 5. PARTNER SETTINGS */}
           {activeTab === "partners" && (
             <div className="space-y-5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -520,7 +688,6 @@ export default function AccountRootPage() {
                 </button>
               </div>
 
-              {/* Partner Types */}
               <div className="p-4 rounded-xl border border-slate-200 space-y-3">
                 <h3 className="font-bold text-sm text-slate-900">
                   Partner types
@@ -556,7 +723,6 @@ export default function AccountRootPage() {
                 </div>
               </div>
 
-              {/* Prospection Pipeline & Card Layouts */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <h4 className="font-bold text-slate-900">
@@ -587,9 +753,7 @@ export default function AccountRootPage() {
               </div>
 
               <button
-                onClick={() =>
-                  handleSaveSettings("Partner settings saved!")
-                }
+                onClick={() => handleSaveSettings("Partner settings saved!")}
                 className="px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold"
               >
                 Save Partner Settings
@@ -597,7 +761,7 @@ export default function AccountRootPage() {
             </div>
           )}
 
-          {/* 6. LEAD SETTINGS (Distinct Tab — Fixes D7) */}
+          {/* 6. LEAD SETTINGS (including Lead-Form Consent Wording & Terms Link — §3.5.2) */}
           {activeTab === "leads" && (
             <div className="space-y-5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -640,17 +804,48 @@ export default function AccountRootPage() {
                   </select>
                 </div>
 
-                <div className="p-4 rounded-xl border border-slate-200 space-y-2 md:col-span-2">
-                  <label className="block font-bold text-slate-900">
-                    Acknowledge lead submissions (Email Template)
-                  </label>
-                  <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white">
-                    {emailTemplates.map((t) => (
-                      <option key={t.id} value={t.name}>
-                        Template: {t.name}
-                      </option>
-                    ))}
-                  </select>
+                <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-3 md:col-span-2">
+                  <h3 className="font-bold text-slate-900">
+                    Public Partner Lead Form — Required Prospect Consent Wording
+                  </h3>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Consent checkbox text (supports{" "}
+                      <code>{"{{workspace.name}}"}</code>)
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={leadConsentText}
+                      onChange={(e) => setLeadConsentText(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Terms / privacy link label
+                      </label>
+                      <input
+                        value={leadConsentTermsLabel}
+                        onChange={(e) =>
+                          setLeadConsentTermsLabel(e.target.value)
+                        }
+                        placeholder="Terms & Privacy Policy"
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">
+                        Terms / privacy URL (optional)
+                      </label>
+                      <input
+                        value={leadConsentTermsUrl}
+                        onChange={(e) => setLeadConsentTermsUrl(e.target.value)}
+                        placeholder="https://example.com/privacy"
+                        className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -678,7 +873,6 @@ export default function AccountRootPage() {
                 </button>
               </div>
 
-              {/* 2. Deal stages */}
               <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                 <h3 className="font-bold text-sm text-slate-900">
                   2. Deal stages (10 Pipeline Stages including Holding)
@@ -695,14 +889,15 @@ export default function AccountRootPage() {
                 </div>
               </div>
 
-              {/* 3. Deal cards & 4. Channel-conflict detection for deals */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <h4 className="font-bold text-slate-900">
                     3. Deal cards (Kanban Card Layout)
                   </h4>
                   <p className="text-slate-600">
-                    Visible card properties: Deal Name, Partner Name, Amount &amp; Currency, Probability (%), Expected Close Date, Owner, Conflict Flag.
+                    Visible card properties: Deal Name, Partner Name, Amount
+                    &amp; Currency, Probability (%), Expected Close Date, Owner,
+                    Conflict Flag.
                   </p>
                 </div>
 
@@ -716,10 +911,12 @@ export default function AccountRootPage() {
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
                   >
                     <option value="Warn & flag duplicate Deals across Customer company or contact email domain">
-                      Warn &amp; flag duplicate Deals across Customer company or contact email domain
+                      Warn &amp; flag duplicate Deals across Customer company or
+                      contact email domain
                     </option>
                     <option value="Block partners from registering a Deal when an active protected Deal exists">
-                      Block partners from registering a Deal when an active protected Deal exists
+                      Block partners from registering a Deal when an active
+                      protected Deal exists
                     </option>
                     <option value="Allow duplicate deal registrations (No conflict check)">
                       Allow duplicate deal registrations (No conflict check)
@@ -728,7 +925,6 @@ export default function AccountRootPage() {
                 </div>
               </div>
 
-              {/* 5. Deal expiration, 8. Validation strategy, 9. Acknowledge deal registrations */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <label className="block font-bold text-slate-900">
@@ -766,7 +962,8 @@ export default function AccountRootPage() {
 
                 <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <label className="block font-bold text-slate-900">
-                    6. Deal resubmission &amp; 7. Associate customers automatically
+                    6. Deal resubmission &amp; 7. Associate customers
+                    automatically
                   </label>
                   <label className="flex items-center space-x-2 pt-1">
                     <input
@@ -777,7 +974,7 @@ export default function AccountRootPage() {
                       }
                     />
                     <span className="font-medium text-slate-800">
-                      Deal resubmission — Allow partners to resubmit expired or refused deals
+                      Allow partners to resubmit expired or refused deals
                     </span>
                   </label>
                   <label className="flex items-center space-x-2">
@@ -789,7 +986,7 @@ export default function AccountRootPage() {
                       }
                     />
                     <span className="font-medium text-slate-800">
-                      Associate customers automatically — Link or create Customer when Deal closes won
+                      Link or create Customer when Deal closes won
                     </span>
                   </label>
                 </div>
@@ -824,6 +1021,7 @@ export default function AccountRootPage() {
                     onChange={(e) => setAcknowledgeDealTemplate(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
                   >
+                    <option value="">None selected</option>
                     {emailTemplates.map((t) => (
                       <option key={t.id} value={t.name}>
                         Template: {t.name}
@@ -842,7 +1040,7 @@ export default function AccountRootPage() {
             </div>
           )}
 
-          {/* 8. PAYOUT SETTINGS (Distinct Tab — Fixes D7) */}
+          {/* 8. PAYOUT SETTINGS (§3.5.2 Self-Invoicing Entity & Address from Settings) */}
           {activeTab === "payouts" && (
             <div className="space-y-5">
               <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-2">
@@ -871,12 +1069,12 @@ export default function AccountRootPage() {
                     </select>
                   </label>
                   <label className="block text-slate-600">
-                    Minimum payout threshold (SGD):
+                    Minimum payout threshold ({mainCurrency}):
                     <input
                       type="number"
-                      value={autoPayoutThresholdSgd}
+                      value={autoPayoutThresholdBase}
                       onChange={(e) =>
-                        setAutoPayoutThresholdSgd(Number(e.target.value) || 0)
+                        setAutoPayoutThresholdBase(Number(e.target.value) || 0)
                       }
                       className="w-full mt-1 px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                     />
@@ -885,45 +1083,48 @@ export default function AccountRootPage() {
 
                 <div className="p-4 rounded-xl border border-slate-200 space-y-2">
                   <h3 className="font-bold text-slate-900">
-                    Payout providers visible on Partner Portal
+                    Payout settlement methods
                   </h3>
-                  {["Wise", "Stripe", "PayPal", "Payoneer", "Chargebee"].map(
-                    (prov) => (
-                      <label
-                        key={prov}
-                        className="flex items-center justify-between"
-                      >
-                        <span className="font-medium text-slate-800">
-                          {prov}
-                        </span>
-                        <input type="checkbox" defaultChecked />
-                      </label>
-                    )
-                  )}
+                  {["Manual", "Bank Transfer"].map((prov) => (
+                    <label
+                      key={prov}
+                      className="flex items-center justify-between"
+                    >
+                      <span className="font-medium text-slate-800">{prov}</span>
+                      <input type="checkbox" defaultChecked />
+                    </label>
+                  ))}
                 </div>
               </div>
 
               <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-3">
                 <label className="flex items-center justify-between font-bold text-slate-900">
                   <span>
-                    Enable Self-Invoicing (Auto-generate partner invoices from
-                    payout batches)
+                    Enable Self-Invoicing (Generate partner invoices using your
+                    legal entity details below)
                   </span>
-                  <input type="checkbox" defaultChecked />
+                  <input
+                    type="checkbox"
+                    checked={selfInvoicingEnabled}
+                    onChange={(e) => setSelfInvoicingEnabled(e.target.checked)}
+                  />
                 </label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <input
-                    defaultValue="Eber / R-Cloud Enterprise Pte Ltd"
-                    placeholder="Legal Company Name"
+                    value={legalEntityName}
+                    onChange={(e) => setLegalEntityName(e.target.value)}
+                    placeholder="Legal Company Name (e.g. Acme Ltd)"
                     className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                   />
                   <input
-                    defaultValue="GST-SG-202688192M"
-                    placeholder="Tax / GST ID"
+                    value={taxId}
+                    onChange={(e) => setTaxId(e.target.value)}
+                    placeholder="Tax / Registration ID"
                     className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                   />
                   <input
-                    defaultValue="1 Raffles Place, #40-02, Singapore 048616"
+                    value={billingAddress}
+                    onChange={(e) => setBillingAddress(e.target.value)}
                     placeholder="Billing Address"
                     className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                   />
@@ -939,269 +1140,32 @@ export default function AccountRootPage() {
             </div>
           )}
 
-          {/* 9. PROPERTIES */}
-          {activeTab === "properties" && (
-            <div className="space-y-4">
-              <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-2">
-                Custom Properties Builder (10 Object Types)
-              </h2>
-              <div className="flex flex-wrap gap-1.5">
-                {PROPERTY_OBJECTS.map((obj) => (
-                  <button
-                    key={obj}
-                    onClick={() => setPropObject(obj)}
-                    className={`px-3 py-1.5 rounded-lg font-semibold ${
-                      propObject === obj
-                        ? "bg-blue-600 text-white"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
-                  >
-                    {obj}
-                  </button>
-                ))}
-              </div>
-
-              <form
-                onSubmit={handleAddProperty}
-                className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap gap-2 items-end"
-              >
-                <div className="flex-1 min-w-[180px]">
-                  <label className="block font-medium text-slate-700 mb-1">
-                    New {propObject} Property Label
-                  </label>
-                  <input
-                    value={newPropName}
-                    onChange={(e) => setNewPropName(e.target.value)}
-                    placeholder="e.g. Regional ERP System"
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-slate-700 mb-1">
-                    Field Type
-                  </label>
-                  <select
-                    value={newPropType}
-                    onChange={(e) => setNewPropType(e.target.value)}
-                    className="px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
-                  >
-                    <option>Single line text</option>
-                    <option>Number</option>
-                    <option>Email</option>
-                    <option>Checkbox</option>
-                    <option>Single select</option>
-                  </select>
-                </div>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 rounded-lg bg-blue-600 text-white font-semibold flex items-center space-x-1"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add property</span>
-                </button>
-              </form>
-
-              <div className="divide-y divide-slate-100">
-                {customProps.map((cp) => (
-                  <div
-                    key={cp.id}
-                    className="py-2.5 flex items-center justify-between"
-                  >
-                    <div>
-                      <p className="font-bold text-slate-900">{cp.name}</p>
-                      <p className="text-slate-500">{cp.subtitle}</p>
-                    </div>
-                    <StatusBadge status={cp.status} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 10. ACCOUNT DATA (With Typed Confirmation for Reset — §1.4 & §5.2) */}
-          {activeTab === "data" && (
-            <div className="space-y-4">
-              <div className="flex items-center space-x-2 border-b border-slate-100 pb-2">
-                <Database className="w-4 h-4 text-blue-600" />
-                <h2 className="text-base font-bold text-slate-900">
-                  Account data — Safe Test Data &amp; Protected Reset
-                </h2>
-              </div>
-              <div className="p-4 rounded-xl border border-amber-200 bg-amber-50/40 space-y-3">
-                <div className="flex items-start space-x-2">
-                  <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-bold text-amber-900">
-                      Danger Zone — Protected Data Reset
-                    </p>
-                    <p className="text-amber-800">
-                      Destructive resets are disabled by
-                      default and require explicit owner approval and typing{" "}
-                      <code>RESET</code> below.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <input
-                    value={resetConfirmationText}
-                    onChange={(e) => setResetConfirmationText(e.target.value)}
-                    placeholder='Type "RESET" to enable button...'
-                    className="px-3 py-1.5 border border-amber-300 rounded-lg bg-white"
-                  />
-                  <button
-                    disabled={resetConfirmationText !== "RESET"}
-                    onClick={() => {
-                      showToast(
-                        "Protected mode: Ask the workspace owner before running a destructive reset."
-                      );
-                      setResetConfirmationText("");
-                    }}
-                    className={`px-4 py-1.5 rounded-lg font-semibold ${
-                      resetConfirmationText === "RESET"
-                        ? "bg-amber-600 text-white hover:bg-amber-700"
-                        : "bg-slate-200 text-slate-400 cursor-not-allowed"
-                    }`}
-                  >
-                    Reset data
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 12. INTEGRATION (Show Token Once at Creation + Store Hashed + Revoke) */}
-          {activeTab === "integration" && (
-            <div className="space-y-4">
-              <div className="flex items-center space-x-2 border-b border-slate-100 pb-2">
-                <Code2 className="w-4 h-4 text-blue-600" />
-                <h2 className="text-base font-bold text-slate-900">
-                  JavaScript Tracking Snippet (r.js) &amp; API Access Tokens
-                </h2>
-              </div>
-              <div className="p-3.5 rounded-xl bg-slate-900 text-blue-200 font-mono text-[11px] overflow-x-auto">
-                {`<script src="https://cdn.r-prm.example.com/r.js" data-account="${acct.workspaceId || acct.workspaceSlug || "r-cloud-global"}" async></script>`}
-              </div>
-              <button
-                onClick={() =>
-                  showToast(
-                    "Verified r.js snippet installation on authorized domain!"
-                  )
-                }
-                className="px-3.5 py-1.5 rounded-lg bg-blue-600 text-white font-semibold flex items-center space-x-1"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>Verify installation</span>
-              </button>
-
-              <div className="pt-3 border-t border-slate-200 space-y-3">
-                <h3 className="font-bold text-sm text-slate-900">
-                  API Access Tokens ({apiTokens.length}) — Shown Once at
-                  Creation, Stored Hashed
-                </h3>
-
-                {createdTokenPlaintext && (
-                  <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 space-y-1">
-                    <p className="font-bold">
-                      Copy your new API token now — it will never be displayed
-                      in plaintext again:
-                    </p>
-                    <p className="font-mono bg-white px-3 py-1.5 rounded border border-emerald-200 select-all">
-                      {createdTokenPlaintext}
-                    </p>
-                  </div>
-                )}
-
-                <form onSubmit={handleCreateToken} className="flex gap-2">
-                  <input
-                    value={newTokenName}
-                    onChange={(e) => setNewTokenName(e.target.value)}
-                    placeholder="New token name (e.g. ERP Webhook Sync)"
-                    className="flex-1 px-3 py-1.5 border border-slate-300 rounded-lg"
-                  />
-                  <button
-                    type="submit"
-                    className="px-4 py-1.5 rounded-lg bg-blue-600 text-white font-semibold"
-                  >
-                    + New token
-                  </button>
-                </form>
-
-                <div className="divide-y divide-slate-100">
-                  {apiTokens.map((tk) => (
-                    <div
-                      key={tk.id}
-                      className="py-2.5 flex items-center justify-between"
-                    >
-                      <div>
-                        <p className="font-bold text-slate-900">{tk.name}</p>
-                        <p className="text-slate-500 font-mono">{tk.subtitle}</p>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <StatusBadge status={tk.status} />
-                        <button
-                          onClick={() =>
-                            mutate(
-                              "DELETE_MANAGE_ITEM",
-                              { id: tk.id },
-                              `Revoked API token "${tk.name}"`
-                            )
-                          }
-                          className="px-2.5 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 font-semibold"
-                        >
-                          Revoke
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 13. AUDIT TRAIL (§3 Slice 0c & §9) */}
-          {activeTab === "audit-log" && (
-            <div className="space-y-4">
-              <div className="flex items-center space-x-2 border-b border-slate-100 pb-2">
-                <History className="w-4 h-4 text-blue-600" />
-                <h2 className="text-base font-bold text-slate-900">
-                  Immutable Audit Log ({auditLogs.length} Events)
-                </h2>
-              </div>
-              <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
-                {auditLogs.length === 0 ? (
-                  <p className="text-slate-500 py-4">
-                    No audit entries recorded yet. Any create, update, delete,
-                    clawback, or portal impersonation writes here automatically.
-                  </p>
-                ) : (
-                  auditLogs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="py-2.5 flex items-center justify-between gap-4"
-                    >
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-bold text-[10px]">
-                            {log.action}
-                          </span>
-                          <span className="font-bold text-slate-900">
-                            {log.objectType} ({log.objectId})
-                          </span>
-                          <span className="text-slate-500">
-                            by {log.actor} · {log.actorRole}
-                          </span>
-                        </div>
-                        <p className="text-slate-700 mt-0.5">{log.summary}</p>
-                      </div>
-                      <span className="text-slate-400 shrink-0">
-                        {new Date(log.createdAt).toLocaleTimeString()}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
+          <AccountSystemTabs
+            activeTab={activeTab}
+            propertyObjects={PROPERTY_OBJECTS}
+            propObject={propObject}
+            setPropObject={setPropObject}
+            newPropName={newPropName}
+            setNewPropName={setNewPropName}
+            newPropType={newPropType}
+            setNewPropType={setNewPropType}
+            handleAddProperty={handleAddProperty}
+            customProps={customProps}
+            resetConfirmationText={resetConfirmationText}
+            setResetConfirmationText={setResetConfirmationText}
+            showToast={showToast}
+            currentOrigin={currentOrigin}
+            workspaceSlug={
+              acct.workspaceId || acct.workspaceSlug || "workspace"
+            }
+            apiTokens={apiTokens}
+            createdTokenPlaintext={createdTokenPlaintext}
+            newTokenName={newTokenName}
+            setNewTokenName={setNewTokenName}
+            handleCreateToken={handleCreateToken}
+            mutate={mutate}
+            auditLogs={auditLogs}
+          />
         </div>
       </div>
     </div>

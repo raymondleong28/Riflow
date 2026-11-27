@@ -5,6 +5,7 @@ import {
   computeAccountOverlaps,
   normalizeRewardRule,
   canPartnerAccessAsset,
+  SUPPORTED_CURRENCIES,
   toMajorUnits,
 } from "@/lib/prmEngine";
 import { getActiveServerSession } from "@/lib/authSession";
@@ -34,7 +35,6 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { resource: string } }
 ) {
-  // §13.1, §13.3 & §16.2 S3: Enforce server-side session table check (expiry & revocation) on EVERY API request!
   const session = await getActiveServerSession(req);
   if (!session) {
     return NextResponse.json(
@@ -74,12 +74,12 @@ export async function GET(
         const deals = dealsRaw.map((d) => ({
           ...d,
           amount: toMajorUnits(d.amount),
-          amountSgd: toMajorUnits(d.amountSgd),
+          amountBase: toMajorUnits(d.amountBase),
         }));
         const rewards = rewardsRaw.map((r) => ({
           ...r,
           amount: toMajorUnits(r.amount),
-          amountSgd: toMajorUnits(r.amountSgd),
+          amountBase: toMajorUnits(r.amountBase),
         }));
         const computed = partnersRaw.map((p) => {
           const decryptedToken =
@@ -118,8 +118,6 @@ export async function GET(
           break;
         }
 
-        // §13.1 & §16.2 S8 Bank details lockdown: strip bankDetailsJson from all collection list responses!
-        // Decrypt and return bankDetailsJson ONLY on single-partner requests (?id=...) to authorized coworker roles.
         if (!id) {
           records = scoped.map(({ bankDetailsJson: _bank, ...rest }) => rest);
         } else {
@@ -143,18 +141,17 @@ export async function GET(
         const deals = dealsRaw.map((d) => ({
           ...d,
           amount: toMajorUnits(d.amount),
-          amountSgd: toMajorUnits(d.amountSgd),
+          amountBase: toMajorUnits(d.amountBase),
         }));
         const rewards = rewardsRaw.map((r) => ({
           ...r,
           amount: toMajorUnits(r.amount),
-          amountSgd: toMajorUnits(r.amountSgd),
+          amountBase: toMajorUnits(r.amountBase),
         }));
         const computedPartners = partnersRaw.map((p) =>
           computePartnerKpis(p, leads, deals, rewards)
         );
 
-        // §14.2 Slice 2 & §15.2 Slice 2: Partner sessions receive ONLY their own program, and within it ONLY the level they are on!
         if (session.identityType === "partner" && scopedPartner) {
           const ownProg = programsRaw.find(
             (pr) =>
@@ -183,7 +180,7 @@ export async function GET(
           const normalizedLevels = levels.map((lvl) => ({
             ...lvl,
             rewards: Array.isArray(lvl.rewards)
-              ? lvl.rewards.map(normalizeRewardRule)
+              ? lvl.rewards.map((r: unknown) => normalizeRewardRule(r))
               : [],
           }));
           const progPartners = computedPartners.filter(
@@ -238,9 +235,9 @@ export async function GET(
         records = rawDeals.map((d) => ({
           ...d,
           amountMinor: d.amount,
-          amountSgdMinor: d.amountSgd,
+          amountBaseMinor: d.amountBase,
           amount: toMajorUnits(d.amount),
-          amountSgd: toMajorUnits(d.amountSgd),
+          amountBase: toMajorUnits(d.amountBase),
         }));
         if (scopedPartner) {
           records = records.filter(
@@ -259,8 +256,8 @@ export async function GET(
         });
         records = rawCustomers.map((c) => ({
           ...c,
-          revenuesSgdMinor: c.revenuesSgd,
-          revenuesSgd: toMajorUnits(c.revenuesSgd),
+          revenuesBaseMinor: c.revenuesBase,
+          revenuesBase: toMajorUnits(c.revenuesBase),
         }));
         if (scopedPartner) {
           records = records.filter(
@@ -280,9 +277,9 @@ export async function GET(
         records = rawTxs.map((t) => ({
           ...t,
           amountMinor: t.amount,
-          amountSgdMinor: t.amountSgd,
+          amountBaseMinor: t.amountBase,
           amount: toMajorUnits(t.amount),
-          amountSgd: toMajorUnits(t.amountSgd),
+          amountBase: toMajorUnits(t.amountBase),
         }));
         if (scopedPartner) {
           records = records.filter(
@@ -302,9 +299,9 @@ export async function GET(
         records = rawRewards.map((r) => ({
           ...r,
           amountMinor: r.amount,
-          amountSgdMinor: r.amountSgd,
+          amountBaseMinor: r.amountBase,
           amount: toMajorUnits(r.amount),
-          amountSgd: toMajorUnits(r.amountSgd),
+          amountBase: toMajorUnits(r.amountBase),
         }));
         if (scopedPartner) {
           records = records.filter(
@@ -318,25 +315,36 @@ export async function GET(
       }
 
       case "payouts": {
-        // §16.4 P1 & F6: Always compute payout amount and rewardsCount dynamically from linked `rewards` relation (stored in minor units)!
-        const payoutsWithRewards = await prisma.payout.findMany({
-          include: { rewards: true },
-          orderBy: { createdAt: "desc" },
-        });
+        const [payoutsWithRewards, acctRow] = await Promise.all([
+          prisma.payout.findMany({
+            include: { rewards: true },
+            orderBy: { createdAt: "desc" },
+          }),
+          prisma.appSetting.findUnique({ where: { key: "account_settings" } }),
+        ]);
+        let baseCurrency = SUPPORTED_CURRENCIES[0];
+        if (acctRow?.valueJson) {
+          try {
+            baseCurrency =
+              JSON.parse(acctRow.valueJson).mainCurrency || baseCurrency;
+          } catch {
+            // ignore
+          }
+        }
         const computedPayouts = payoutsWithRewards.map((po) => {
           const linked = po.rewards || [];
-          const computedMinorSgd = linked.reduce(
-            (s, r) => s + Number(r.amountSgd || 0),
+          const computedMinorBase = linked.reduce(
+            (s, r) => s + Number(r.amountBase || 0),
             0
           );
-          const computedMajorSgd = toMajorUnits(computedMinorSgd);
+          const computedMajorBase = toMajorUnits(computedMinorBase);
           return {
             ...po,
-            amountMinor: computedMinorSgd,
-            amountSgdMinor: computedMinorSgd,
-            amount: computedMajorSgd,
-            currency: "SGD",
-            amountSgd: computedMajorSgd,
+            amountMinor: computedMinorBase,
+            amountBaseMinor: computedMinorBase,
+            amount: computedMajorBase,
+            currency: po.currency || baseCurrency,
+            amountBase: computedMajorBase,
             rewardsCount: linked.length,
           };
         });
@@ -423,8 +431,8 @@ export async function GET(
         });
         records = rawPlans.map((bp) => ({
           ...bp,
-          targetRevSgdMinor: bp.targetRevSgd,
-          targetRevSgd: toMajorUnits(bp.targetRevSgd),
+          targetRevBaseMinor: bp.targetRevBase,
+          targetRevBase: toMajorUnits(bp.targetRevBase),
         }));
         if (scopedPartner) {
           records = records.filter(
@@ -489,8 +497,8 @@ export async function GET(
         });
         records = rawLinks.map((lnk) => ({
           ...lnk,
-          revenuesSgdMinor: lnk.revenuesSgd,
-          revenuesSgd: toMajorUnits(lnk.revenuesSgd),
+          revenuesBaseMinor: lnk.revenuesBase,
+          revenuesBase: toMajorUnits(lnk.revenuesBase),
         }));
         if (scopedPartner) {
           records = records.filter(
@@ -526,9 +534,10 @@ export async function GET(
             (n) =>
               n.isShared &&
               (n.entityId === scopedPartner.id ||
-                n.author
-                  .toLowerCase()
-                  .includes(scopedPartner.contactFirstName.toLowerCase()))
+                (scopedPartner.contactFirstName &&
+                  n.author
+                    .toLowerCase()
+                    .includes(scopedPartner.contactFirstName.toLowerCase())))
           );
           if (session.identityType === "partner") {
             records = records.map(serializeNoteForPartner);
@@ -541,7 +550,6 @@ export async function GET(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const settingsMap: Record<string, any> = {};
         for (const row of rows) {
-          // §16.2 S12: Never return smtp_config from AppSetting
           if (row.key === "smtp_config") continue;
           try {
             settingsMap[row.key] = JSON.parse(row.valueJson);

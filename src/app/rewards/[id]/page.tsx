@@ -4,14 +4,21 @@ import React, { useState } from "react";
 import { useParams } from "next/navigation";
 import { usePrm } from "@/context/PrmContext";
 import { BackBreadcrumb, StatusBadge } from "@/components/SharedEngines";
-import { DEFAULT_FX_TABLE } from "@/lib/prmEngine";
+import {
+  DEFAULT_FX_TABLE,
+  SUPPORTED_CURRENCIES,
+  convertWithDatedFx,
+} from "@/lib/prmEngine";
 import { RotateCcw } from "lucide-react";
 
 export default function RewardDetailPage() {
   const params = useParams();
   const id = String(params?.id || "");
-  const { rewards, mutate } = usePrm();
+  const { rewards, settings, mutate } = usePrm();
   const [refuseReason, setRefuseReason] = useState("");
+
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
 
   const reward = rewards.find((r) => r.id === id);
   if (!reward) {
@@ -30,7 +37,13 @@ export default function RewardDetailPage() {
     );
   }
 
-  const fxRate = DEFAULT_FX_TABLE.ratesToSgd[reward.currency] ?? 1;
+  const fxRate = convertWithDatedFx(
+    reward.amount,
+    reward.currency,
+    baseCurrency,
+    DEFAULT_FX_TABLE
+  ).fxRate;
+  const baseAmt = reward.amountBase ?? reward.amount ?? 0;
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-6 space-y-5 text-xs">
@@ -60,7 +73,7 @@ export default function RewardDetailPage() {
             </button>
           )}
           {(reward.status === "Accepted" || reward.status === "Paid") &&
-            reward.amountSgd > 0 && (
+            baseAmt > 0 && (
               <button
                 onClick={() =>
                   mutate(
@@ -97,17 +110,18 @@ export default function RewardDetailPage() {
             <span className="font-bold">
               {reward.currency} {reward.amount.toLocaleString()}
             </span>
-            <span className="text-slate-500">Base Amount (SGD)</span>
+            <span className="text-slate-500">Base Amount ({baseCurrency})</span>
             <span
               className={`font-extrabold ${
-                reward.amountSgd < 0 ? "text-red-600" : "text-blue-700"
+                baseAmt < 0 ? "text-red-600" : "text-blue-700"
               }`}
             >
-              SGD {reward.amountSgd.toLocaleString()}
+              {baseCurrency} {baseAmt.toLocaleString()}
             </span>
             <span className="text-slate-500">Dated FX Rate</span>
             <span className="font-mono">
-              1 {reward.currency} = {fxRate} SGD ({DEFAULT_FX_TABLE.rateDate})
+              1 {reward.currency} = {fxRate} {baseCurrency} (
+              {DEFAULT_FX_TABLE.rateDate})
             </span>
             <span className="text-slate-500">From Activity</span>
             <span className="font-medium">{reward.fromActivity}</span>

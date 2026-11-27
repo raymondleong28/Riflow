@@ -12,8 +12,8 @@ export default function FirstRunSetupPage() {
 
   const [setupToken, setSetupToken] = useState("");
   const [workspaceName, setWorkspaceName] = useState("");
-  const [timezone, setTimezone] = useState("Asia/Singapore (GMT+08:00)");
-  const [mainCurrency, setMainCurrency] = useState("SGD");
+  const [timezone, setTimezone] = useState("UTC (GMT+00:00)");
+  const [mainCurrency, setMainCurrency] = useState("");
   const [logoText, setLogoText] = useState("R");
   const [primaryColor, setPrimaryColor] = useState("#2563EB");
   const [portalDomain, setPortalDomain] = useState("");
@@ -190,10 +190,13 @@ export default function FirstRunSetupPage() {
                 onChange={(e) => setTimezone(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg"
               >
+                <option value="UTC (GMT+00:00)">UTC (GMT+00:00)</option>
+                <option value="Asia/Kuala_Lumpur (GMT+08:00)">
+                  Asia/Kuala_Lumpur (GMT+08:00)
+                </option>
                 <option value="Asia/Singapore (GMT+08:00)">
                   Asia/Singapore (GMT+08:00)
                 </option>
-                <option value="UTC (GMT+00:00)">UTC (GMT+00:00)</option>
                 <option value="Europe/London (GMT+00:00)">
                   Europe/London (GMT+00:00)
                 </option>
@@ -211,14 +214,18 @@ export default function FirstRunSetupPage() {
                 Main Currency *
               </label>
               <select
+                required
                 value={mainCurrency}
                 onChange={(e) => setMainCurrency(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg"
               >
+                <option value="">Select currency...</option>
+                <option value="MYR">Malaysian Ringgit (MYR)</option>
                 <option value="SGD">Singapore Dollar (SGD)</option>
                 <option value="USD">US Dollar (USD)</option>
                 <option value="EUR">Euro (EUR)</option>
-                <option value="MYR">Malaysian Ringgit (MYR)</option>
+                <option value="GBP">British Pound (GBP)</option>
+                <option value="AUD">Australian Dollar (AUD)</option>
               </select>
             </div>
 
@@ -271,7 +278,7 @@ export default function FirstRunSetupPage() {
                 required
                 value={adminName}
                 onChange={(e) => setAdminName(e.target.value)}
-                placeholder="e.g. Ray Leong"
+                placeholder="e.g. Jane Doe"
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg"
               />
             </div>

@@ -5,6 +5,7 @@ import {
   hashPasswordWithRandomSalt,
 } from "@/lib/authSession";
 import { getCookieOptions } from "@/lib/config";
+import { DEFAULT_COMMISSION_TEMPLATES } from "@/lib/prmEngine";
 
 export const dynamic = "force-dynamic";
 
@@ -79,12 +80,20 @@ export async function POST(req: NextRequest) {
       .trim()
       .toLowerCase();
     const cleanPassword = String(adminPassword || "");
+    const cleanCurrency = String(mainCurrency || "")
+      .trim()
+      .toUpperCase();
 
-    if (!cleanWorkspaceName || !cleanAdminName || !cleanAdminEmail) {
+    if (
+      !cleanWorkspaceName ||
+      !cleanAdminName ||
+      !cleanAdminEmail ||
+      !cleanCurrency
+    ) {
       return NextResponse.json(
         {
           error:
-            "Workspace name, administrator name, and administrator email are required.",
+            "Workspace name, main currency, administrator name, and administrator email are required.",
         },
         { status: 400 }
       );
@@ -107,64 +116,9 @@ export async function POST(req: NextRequest) {
     const [firstName, ...restNames] = cleanAdminName.split(/\s+/);
     const lastName = restNames.join(" ") || "";
 
-    const accountSettingsPayload = {
-      accountName: cleanWorkspaceName,
-      workspaceId: `ws_${workspaceSlug}`,
-      workspaceSlug,
-      timezone: String(timezone || "Asia/Singapore (GMT+08:00)").trim(),
-      mainCurrency: String(mainCurrency || "SGD").trim(),
-      multiCurrency: true,
-      logoText:
-        String(logoText || cleanWorkspaceName.charAt(0) || "R")
-          .trim()
-          .slice(0, 2)
-          .toUpperCase() || "R",
-      primaryColor: String(primaryColor || "#2563EB").trim(),
-      portalDomain: String(
-        portalDomain || `https://partners.${workspaceSlug}.local`
-      ).trim(),
-      directorySubdomain: workspaceSlug,
-      requireMfaCoworkers: false,
-      requireMfaPartners: false,
-      ssoEnabledCoworkers: false,
-      ssoEnabledPartners: false,
-      dealExpirationDays: 90,
-      dealReminderDays: 14,
-      autoAssociateCustomers: true,
-      conflictDetection:
-        "Warn on duplicate email or company domain across Leads, Deals, and Customers",
-      validationStrategy: "Partner Owner or Administrator",
-      autoPayoutSchedule: "Monthly (1st business day)",
-      autoPayoutThresholdSgd: 250,
-      payoutProviders: ["Manual"],
-      selfInvoicingEnabled: true,
-    };
-
-    const userPrefsPayload = {
-      firstName: firstName || cleanAdminName,
-      lastName,
-      email: cleanAdminEmail,
-      jobTitle: "Workspace Administrator",
-      phone: "",
-      calendarLink: "",
-      language: "English (US)",
-      timezone: accountSettingsPayload.timezone,
-      mfaEnabled: false,
-      googleCalendarConnected: false,
-      notifications: {
-        "New Lead Submitted by Partner": { inApp: true, email: true },
-        "Shared Lead Accepted or Refused": { inApp: true, email: true },
-        "New Deal Registered": { inApp: true, email: true },
-        "Deal Stage Updated": { inApp: true, email: false },
-        "Deal Expiring Soon": { inApp: true, email: true },
-        "New Partner Application": { inApp: true, email: true },
-        "Reward Pending Validation": { inApp: true, email: false },
-        "Account Overlap Detected": { inApp: true, email: true },
-      },
-    };
+    const cleanTimezone = String(timezone || "UTC").trim();
 
     const adminUser = await prisma.$transaction(async (tx) => {
-      // Double-check inside transaction that no admin was created concurrently
       const existingAdmins = await tx.user.count({
         where: {
           identityType: "coworker",
@@ -187,6 +141,71 @@ export async function POST(req: NextRequest) {
           isTestAccount: false,
         },
       });
+
+      const accountSettingsPayload = {
+        accountName: cleanWorkspaceName,
+        workspaceId: `ws_${workspaceSlug}`,
+        workspaceSlug,
+        timezone: cleanTimezone,
+        mainCurrency: cleanCurrency,
+        multiCurrency: true,
+        logoText:
+          String(logoText || cleanWorkspaceName.charAt(0) || "R")
+            .trim()
+            .slice(0, 2)
+            .toUpperCase() || "R",
+        primaryColor: String(primaryColor || "#2563EB").trim(),
+        portalDomain: String(
+          portalDomain || `https://partners.${workspaceSlug}.local`
+        ).trim(),
+        directorySubdomain: workspaceSlug,
+        defaultOwnerId: createdUser.id,
+        defaultOwnerName: cleanAdminName,
+        legalEntityName: "",
+        taxId: "",
+        billingAddress: "",
+        leadConsentText:
+          "I confirm I have obtained permission from this prospect to share their business contact details with {{workspace.name}}.",
+        leadConsentTermsLabel: "Terms & Privacy Policy",
+        leadConsentTermsUrl: "",
+        requireMfaCoworkers: false,
+        requireMfaPartners: false,
+        ssoEnabledCoworkers: false,
+        ssoEnabledPartners: false,
+        dealExpirationDays: 90,
+        dealReminderDays: 14,
+        autoAssociateCustomers: true,
+        conflictDetection:
+          "Warn on duplicate email or company domain across Leads, Deals, and Customers",
+        validationStrategy: "Partner Owner or Administrator",
+        autoPayoutSchedule: "Monthly (1st business day)",
+        autoPayoutThresholdBase: 250,
+        payoutProviders: ["Manual"],
+        selfInvoicingEnabled: true,
+      };
+
+      const userPrefsPayload = {
+        firstName: firstName || cleanAdminName,
+        lastName,
+        email: cleanAdminEmail,
+        jobTitle: "Workspace Administrator",
+        phone: "",
+        calendarLink: "",
+        language: "English (US)",
+        timezone: cleanTimezone,
+        mfaEnabled: false,
+        googleCalendarConnected: false,
+        notifications: {
+          "New Lead Submitted by Partner": { inApp: true, email: true },
+          "Shared Lead Accepted or Refused": { inApp: true, email: true },
+          "New Deal Registered": { inApp: true, email: true },
+          "Deal Stage Updated": { inApp: true, email: false },
+          "Deal Expiring Soon": { inApp: true, email: true },
+          "New Partner Application": { inApp: true, email: true },
+          "Reward Pending Validation": { inApp: true, email: false },
+          "Account Overlap Detected": { inApp: true, email: true },
+        },
+      };
 
       await tx.appSetting.upsert({
         where: { key: "account_settings" },
@@ -213,11 +232,41 @@ export async function POST(req: NextRequest) {
           subtitle: `${cleanAdminEmail} · Workspace Administrator`,
           status: "Administrator",
           metadataJson: JSON.stringify({
+            userId: createdUser.id,
+            email: cleanAdminEmail,
             role: "Administrator",
             invitation: "Accepted",
           }),
         },
       });
+
+      await tx.manageItem.create({
+        data: {
+          category: "onboarding_pipelines",
+          name: "Default Onboarding",
+          subtitle: "Kickoff, Enablement, Active",
+          status: "Active",
+          metadataJson: JSON.stringify({
+            stages: ["Kickoff", "Enablement", "Active"],
+            stageActions: [],
+          }),
+        },
+      });
+
+      for (const tpl of Object.values(DEFAULT_COMMISSION_TEMPLATES)) {
+        await tx.manageItem.create({
+          data: {
+            category: "commission_templates",
+            name: tpl.title,
+            subtitle: `${tpl.amountMode} · ${tpl.duration}`,
+            status: "Active",
+            metadataJson: JSON.stringify({
+              ...tpl,
+              currency: cleanCurrency,
+            }),
+          },
+        });
+      }
 
       await tx.auditLog.create({
         data: {
@@ -226,29 +275,30 @@ export async function POST(req: NextRequest) {
           action: "WORKSPACE_SETUP",
           objectType: "Workspace",
           objectId: accountSettingsPayload.workspaceId,
-          summary: `Initialised workspace "${cleanWorkspaceName}" (${accountSettingsPayload.mainCurrency}) and created first Administrator ${cleanAdminEmail}`,
+          summary: `Initialised workspace "${cleanWorkspaceName}" (${cleanCurrency}) and created first Administrator ${cleanAdminEmail}`,
         },
       });
 
-      return createdUser;
+      return { createdUser, accountSettingsPayload };
     });
 
     const { sessionRowId, cookieValue, expiresAt } =
       await createServerSessionRow({
-        userId: adminUser.id,
+        userId: adminUser.createdUser.id,
         identityType: "coworker",
       });
 
     const res = NextResponse.json({
       ok: true,
-      workspace: accountSettingsPayload,
+      workspace: adminUser.accountSettingsPayload,
       session: {
         sessionId: sessionRowId,
-        userId: adminUser.id,
-        email: adminUser.email,
-        name: adminUser.name,
+        userId: adminUser.createdUser.id,
+        email: adminUser.createdUser.email,
+        name: adminUser.createdUser.name,
         identityType: "coworker",
         role: "Administrator",
+        mfaEnrolled: false,
         issuedAt: Date.now(),
         expiresAt: expiresAt.getTime(),
       },

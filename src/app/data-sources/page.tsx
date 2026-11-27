@@ -6,22 +6,36 @@ import { EntityListToolbar, StatusBadge } from "@/components/SharedEngines";
 import { X } from "lucide-react";
 
 export default function DataSourcesPage() {
-  const { dataSources, partners, mutate, showToast } = usePrm();
+  const { dataSources, partners, settings, mutate, showToast } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
 
+  const workspaceName =
+    settings?.account_settings?.accountName || "Organisation";
+
   const [form, setForm] = useState({
     name: "",
-    sharedWith: "All Strategic Partners",
+    sharedWith: "Selected Partner",
     type: "CSV Upload",
     accountType: "Customers & Prospects",
-    partnerName: "Apex Cloud Solutions Pte Ltd",
-    eberCsv:
-      "Marina Bay Luxury Holdings, marinabayluxury.example.com, Prospect, Alex Morgan\nSingTel Enterprise Cloud, singtelcloud.example.com, Opportunity, Alex Morgan\nVertex Logistics APAC, vertexlogistics.example.com, Customer, Sarah Chen",
-    partnerCsv:
-      "Marina Bay Luxury Group, marinabayluxury.example.com, Customer\nSingTel Enterprise Cloud, singtel-other.example.com, Customer\nUnmatched Partner Co, unmatched.example.com, Prospect",
+    partnerName: "",
+    orgCsv: "",
+    partnerCsv: "",
   });
+
+  const openModal = () => {
+    setForm({
+      name: "",
+      sharedWith: "Selected Partner",
+      type: "CSV Upload",
+      accountType: "Customers & Prospects",
+      partnerName: partners[0]?.name || "",
+      orgCsv: "",
+      partnerCsv: "",
+    });
+    setModalOpen(true);
+  };
 
   const filtered = dataSources.filter(
     (ds) => !search || ds.name.toLowerCase().includes(search.toLowerCase())
@@ -32,16 +46,15 @@ export default function DataSourcesPage() {
     const res = await mutate("UPLOAD_ACCOUNT_MAPPING_LISTS", {
       dataSourceName: form.name,
       partnerName: form.partnerName,
-      eberCsv: form.eberCsv,
+      orgCsv: form.orgCsv,
       partnerCsv: form.partnerCsv,
     });
     if (res?.ok) {
       showToast(
-        `Imported "${form.name}" (${res.eberCount} Eber rows vs ${res.partnerCount} Partner rows) — found ${res.overlapsFound} overlap(s)!`
+        `Imported "${form.name}" (${res.orgCount} ${workspaceName} rows vs ${res.partnerCount} Partner rows) — found ${res.overlapsFound} overlap(s)!`
       );
     }
     setModalOpen(false);
-    setForm({ ...form, name: "" });
   };
 
   return (
@@ -55,7 +68,7 @@ export default function DataSourcesPage() {
         search={search}
         onSearchChange={setSearch}
         primaryActionLabel="Upload & match CSV lists"
-        onPrimaryAction={() => setModalOpen(true)}
+        onPrimaryAction={openModal}
       />
 
       <div className="max-w-[1440px] mx-auto px-6 py-5">
@@ -82,14 +95,16 @@ export default function DataSourcesPage() {
                     <StatusBadge status={ds.status} />
                   </td>
                   <td className="py-3 px-3 text-blue-700 font-medium">
-                    {ds.sharedWith}
+                    {ds.sharedWith || "—"}
                   </td>
                   <td className="py-3 px-3 text-slate-600">{ds.type}</td>
                   <td className="py-3 px-3 text-slate-700">{ds.accountType}</td>
                   <td className="py-3 px-3 text-slate-500">
-                    {ds.lastImportedDate}
+                    {ds.lastImportedDate || "—"}
                   </td>
-                  <td className="py-3 px-4 text-slate-600">{ds.createdBy}</td>
+                  <td className="py-3 px-4 text-slate-600">
+                    {ds.createdBy || "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -105,7 +120,8 @@ export default function DataSourcesPage() {
           >
             <div className="px-5 py-4 bg-blue-600 text-white flex items-center justify-between">
               <h3 className="font-bold text-sm">
-                Upload Eber &amp; Partner CSV Account Lists (Domain &amp; Name Matching)
+                Upload {workspaceName} &amp; Partner CSV Account Lists (Domain
+                &amp; Name Matching)
               </h3>
               <button type="button" onClick={() => setModalOpen(false)}>
                 <X className="w-4 h-4" />
@@ -120,7 +136,7 @@ export default function DataSourcesPage() {
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g. Q4 APAC Enterprise Account Match (CSV)"
+                  placeholder="Account Overlap Match (CSV)"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
@@ -140,15 +156,17 @@ export default function DataSourcesPage() {
                 </div>
                 <div>
                   <label className="block font-medium text-slate-700 mb-1">
-                    Compare against Partner
+                    Compare against Partner *
                   </label>
                   <select
+                    required
                     value={form.partnerName}
                     onChange={(e) =>
                       setForm({ ...form, partnerName: e.target.value })
                     }
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   >
+                    <option value="">Select partner...</option>
                     {partners.map((p) => (
                       <option key={p.id} value={p.name}>
                         {p.name}
@@ -159,31 +177,42 @@ export default function DataSourcesPage() {
               </div>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  1. Eber Account List CSV (Company Name, Domain, Type, Owner)
+                  1. {workspaceName} Account List CSV (Company Name, Domain,
+                  Type, Owner) *
                 </label>
                 <textarea
+                  required
                   rows={3}
-                  value={form.eberCsv}
+                  value={form.orgCsv}
                   onChange={(e) =>
-                    setForm({ ...form, eberCsv: e.target.value })
+                    setForm({ ...form, orgCsv: e.target.value })
+                  }
+                  placeholder={
+                    "Acme Ltd, acme.com, Prospect, Jane Doe\nGlobal Retail Co, globalretail.com, Customer, Jane Doe"
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-[11px]"
                 />
               </div>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  2. Partner Account List CSV (Company Name, Domain, Partner Type)
+                  2. Partner Account List CSV (Company Name, Domain, Partner
+                  Type) *
                 </label>
                 <textarea
+                  required
                   rows={3}
                   value={form.partnerCsv}
                   onChange={(e) =>
                     setForm({ ...form, partnerCsv: e.target.value })
                   }
+                  placeholder={
+                    "Acme Ltd, acme.com, Customer\nOther Prospect Inc, otherprospect.com, Prospect"
+                  }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-[11px]"
                 />
                 <p className="text-[11px] text-slate-500 mt-1">
-                  Overlaps are computed automatically by matching normalized domains first and normalized company names second.
+                  Overlaps are computed automatically by matching normalized
+                  domains first and normalized company names second.
                 </p>
               </div>
             </div>

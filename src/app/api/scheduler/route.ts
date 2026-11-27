@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getActiveServerSession } from "@/lib/authSession";
-import { buildScheduledPayoutBatches, toMinorUnits, toMajorUnits } from "@/lib/prmEngine";
+import {
+  buildScheduledPayoutBatches,
+  currentIsoDateInTimezone,
+  currentMonthKeyInTimezone,
+  SUPPORTED_CURRENCIES,
+  toMinorUnits,
+  toMajorUnits,
+} from "@/lib/prmEngine";
 import { sendEmailViaConnector } from "@/lib/connectors";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +17,13 @@ function isAuthorizedCronOrCoworker(
   req: NextRequest,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   session: any
-): { authorized: boolean; actor: string; actorRole: string; error?: string; status?: number } {
+): {
+  authorized: boolean;
+  actor: string;
+  actorRole: string;
+  error?: string;
+  status?: number;
+} {
   const authHeader = req.headers.get("authorization") || "";
   if (authHeader.startsWith("Bearer ")) {
     const cronSecret = (process.env.CRON_SECRET || "").trim();
@@ -98,6 +111,34 @@ export async function POST(req: NextRequest) {
   const elapsedDays = Number(body.elapsedDays ?? 7);
   const results: string[] = [];
 
+  const acctRow = await prisma.appSetting.findUnique({
+    where: { key: "account_settings" },
+  });
+  let accountSettings: {
+    accountName?: string;
+    mainCurrency?: string;
+    timezone?: string;
+    defaultOwnerId?: string;
+    defaultOwnerName?: string;
+    autoPayoutSchedule?: string;
+    autoPayoutThresholdBase?: number;
+  } = {};
+  if (acctRow?.valueJson) {
+    try {
+      accountSettings = JSON.parse(acctRow.valueJson);
+    } catch {
+      accountSettings = {};
+    }
+  }
+
+  const workspaceName = String(accountSettings.accountName || "Workspace");
+  const baseCurrency = String(
+    accountSettings.mainCurrency || SUPPORTED_CURRENCIES[0]
+  )
+    .trim()
+    .toUpperCase();
+  const todayIso = currentIsoDateInTimezone(accountSettings.timezone);
+
   // 1. Durable Invitation Nurture (Day 2 Reminder -> Day 5 Reminder -> Day 7 Task)
   const pendingPartners = await prisma.partner.findMany({
     where: { status: "Pending" },
@@ -131,12 +172,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (elapsedDays >= 2 && !meta.day2Sent) {
+    if (elapsedDays >= 2 && !meta.day2Sent && partner.contactEmail) {
       const sent = await sendEmailViaConnector({
         to: partner.contactEmail,
         subject: `[Day 2 Reminder] Activate your {{program.name}} Partner Portal`,
-        body: `Hello {{contact.firstName}}, your invitation to join {{program.name}} is waiting.`,
+        body: `Hello {{contact.firstName}}, your invitation from {{workspace.name}} to join {{program.name}} is waiting.`,
         mergeFields: {
+          "workspace.name": workspaceName,
           "program.name": partner.programName,
           "contact.firstName": partner.contactFirstName,
         },
@@ -156,15 +198,18 @@ export async function POST(req: NextRequest) {
         },
       });
       meta.day2Sent = true;
-      results.push(`Day 2 invitation reminder sent to ${partner.contactEmail} (${partner.name})`);
+      results.push(
+        `Day 2 invitation reminder sent to ${partner.contactEmail} (${partner.name})`
+      );
     }
 
-    if (elapsedDays >= 5 && !meta.day5Sent) {
+    if (elapsedDays >= 5 && !meta.day5Sent && partner.contactEmail) {
       const sent = await sendEmailViaConnector({
         to: partner.contactEmail,
         subject: `[Day 5 Reminder] Final reminder to activate {{program.name}} Portal`,
-        body: `Hello {{contact.firstName}}, please activate your {{program.name}} account before your link expires.`,
+        body: `Hello {{contact.firstName}}, please activate your {{program.name}} account with {{workspace.name}} before your link expires.`,
         mergeFields: {
+          "workspace.name": workspaceName,
           "program.name": partner.programName,
           "contact.firstName": partner.contactFirstName,
         },
@@ -184,7 +229,9 @@ export async function POST(req: NextRequest) {
         },
       });
       meta.day5Sent = true;
-      results.push(`Day 5 invitation reminder sent to ${partner.contactEmail} (${partner.name})`);
+      results.push(
+        `Day 5 invitation reminder sent to ${partner.contactEmail} (${partner.name})`
+      );
     }
 
     if (elapsedDays >= 7 && !meta.day7TaskCreated) {
@@ -193,16 +240,26 @@ export async function POST(req: NextRequest) {
         where: { name: taskName },
       });
       if (!existingTask) {
+        const resolvedOwnerId =
+          partner.ownerId || accountSettings.defaultOwnerId || null;
+        const resolvedOwnerName = String(
+          partner.owner || accountSettings.defaultOwnerName || ""
+        ).trim();
+        const isUnassigned = !resolvedOwnerName;
         await prisma.task.create({
           data: {
             name: taskName,
-            status: "Due Today",
+            status: isUnassigned ? "Unassigned (Needs Owner)" : "Due Today",
             type: "Follow-up",
-            dueDate: "2026-11-26",
-            description: `Day 2 + Day 5 invitation reminders sent to ${partner.contactEmail}. Follow up directly with ${partner.contactFirstName} ${partner.contactLastName}.`,
-            assignedTo: partner.owner || "Alex Morgan",
+            dueDate: todayIso,
+            description: isUnassigned
+              ? `Day 2 + Day 5 invitation reminders sent to ${partner.contactEmail}. Follow up directly with ${partner.contactFirstName} ${partner.contactLastName}. [UNASSIGNED: partner has no owner and no default workspace owner is set]`
+              : `Day 2 + Day 5 invitation reminders sent to ${partner.contactEmail}. Follow up directly with ${partner.contactFirstName} ${partner.contactLastName}.`,
+            assignedToId: resolvedOwnerId,
+            assignedTo: resolvedOwnerName,
             associationType: "Partner",
             associationName: partner.name,
+            createdBy: auth.actor,
           },
         });
       }
@@ -240,7 +297,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 2. Execute Active Structured Custom Workflows (§16.4 P3)
+  // 2. Execute Active Structured Custom Workflows
   const activeWorkflows = await prisma.manageItem.findMany({
     where: { category: "workflows", status: "Active" },
   });
@@ -272,13 +329,15 @@ export async function POST(req: NextRequest) {
           }),
         },
       });
-      results.push(`Executed structured workflow "${wf.name}" -> ${newLog.actionExecuted}`);
+      results.push(
+        `Executed structured workflow "${wf.name}" -> ${newLog.actionExecuted}`
+      );
     }
   }
 
-  // 3. Configurable Monthly / Quarterly Automatic Payout Creation (§14.2 Slice 4 & §16.4 P1)
+  // 3. Configurable Monthly / Quarterly Automatic Payout Creation
   if (action === "RUN_AUTO_PAYOUTS" || action === "RUN_TICK") {
-    const [unpaidAcceptedRewards, allPartners, allPrograms, acctRow, allTxs] =
+    const [unpaidAcceptedRewards, allPartners, allPrograms, allTxs] =
       await Promise.all([
         prisma.reward.findMany({
           where: {
@@ -288,25 +347,15 @@ export async function POST(req: NextRequest) {
         }),
         prisma.partner.findMany(),
         prisma.program.findMany(),
-        prisma.appSetting.findUnique({ where: { key: "account_settings" } }),
         prisma.transaction.findMany(),
       ]);
 
-    let accountSettings: {
-      autoPayoutSchedule?: string;
-      autoPayoutThresholdSgd?: number;
-    } = {};
-    if (acctRow?.valueJson) {
-      try {
-        accountSettings = JSON.parse(acctRow.valueJson);
-      } catch {
-        accountSettings = {};
-      }
-    }
+    const payoutSettings = { ...accountSettings };
     if (body.minThreshold !== undefined) {
-      accountSettings.autoPayoutThresholdSgd = Number(body.minThreshold);
+      payoutSettings.autoPayoutThresholdBase = Number(body.minThreshold);
     }
 
+    const fallbackMonth = currentMonthKeyInTimezone(accountSettings.timezone);
     const schedulable = unpaidAcceptedRewards.map((rw) => {
       const matchedTx = allTxs.find((t) => rw.fromActivity.includes(t.name));
       return {
@@ -315,10 +364,10 @@ export async function POST(req: NextRequest) {
         partnerName: rw.partnerName,
         amount: toMajorUnits(rw.amount),
         currency: rw.currency,
-        amountSgd: toMajorUnits(rw.amountSgd),
+        amountBase: toMajorUnits(rw.amountBase),
         status: rw.status,
         payoutNumber: rw.payoutNumber,
-        periodDate: matchedTx?.monthKey || "11/2026",
+        periodDate: matchedTx?.monthKey || fallbackMonth,
       };
     });
 
@@ -326,7 +375,7 @@ export async function POST(req: NextRequest) {
       schedulable,
       allPartners,
       allPrograms,
-      accountSettings
+      payoutSettings
     );
 
     for (const batch of batches) {
@@ -335,9 +384,9 @@ export async function POST(req: NextRequest) {
           payoutNumber: batch.payoutNumber,
           name: batch.name,
           partnerName: batch.partnerName,
-          amount: toMinorUnits(batch.amountSgd),
-          currency: "SGD",
-          amountSgd: toMinorUnits(batch.amountSgd),
+          amount: toMinorUnits(batch.amountBase),
+          currency: baseCurrency,
+          amountBase: toMinorUnits(batch.amountBase),
           periodFrom: batch.periodFrom,
           periodTo: batch.periodTo,
           rewardsCount: batch.rewardsCount,
@@ -355,7 +404,7 @@ export async function POST(req: NextRequest) {
         });
       }
       results.push(
-        `Auto-created ${batch.cadence} payout ${batch.payoutNumber} (${batch.partnerName}, ${batch.periodKey}) for SGD ${batch.amountSgd.toLocaleString()} across ${batch.rewardsCount} accepted rewards`
+        `Auto-created ${batch.cadence} payout ${batch.payoutNumber} (${batch.partnerName}, ${batch.periodKey}) for ${baseCurrency} ${batch.amountBase.toLocaleString()} across ${batch.rewardsCount} accepted rewards`
       );
     }
   }

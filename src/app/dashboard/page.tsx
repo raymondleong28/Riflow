@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { StatusBadge } from "@/components/SharedEngines";
+import { computeLast12Months, SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 import {
   Plus,
   RotateCcw,
@@ -11,9 +12,6 @@ import {
   Check,
   TrendingUp,
   Award,
-  Briefcase,
-  Users,
-  Gift,
   ExternalLink,
 } from "lucide-react";
 
@@ -84,21 +82,6 @@ const DEFAULT_WIDGETS = [
   "deals_stats",
 ];
 
-const MONTHS_12 = [
-  "12/2025",
-  "01/2026",
-  "02/2026",
-  "03/2026",
-  "04/2026",
-  "05/2026",
-  "06/2026",
-  "07/2026",
-  "08/2026",
-  "09/2026",
-  "10/2026",
-  "11/2026",
-];
-
 export default function DashboardPage() {
   const {
     leads,
@@ -115,10 +98,13 @@ export default function DashboardPage() {
   } = usePrm();
 
   const acct = settings?.account_settings || {};
-  const workspaceName = acct.accountName || "R-PRM Workspace";
-  const baseCurrency = acct.mainCurrency || "SGD";
+  const workspaceName = acct.accountName || "Workspace";
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
   const adminFirstName =
     (session?.name || "Administrator").split(" ")[0] || "Administrator";
+
+  // §3.5.1: Compute the last 12 months dynamically from today in the workspace timezone
+  const months12 = computeLast12Months(acct.timezone);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [dealsPeriod, setDealsPeriod] = useState("All time");
@@ -154,7 +140,9 @@ export default function DashboardPage() {
   );
   const partnerAcceptedPct =
     partnerSubmittedLeads.length > 0
-      ? Math.round((partnerAcceptedLeads.length / partnerSubmittedLeads.length) * 100)
+      ? Math.round(
+          (partnerAcceptedLeads.length / partnerSubmittedLeads.length) * 100
+        )
       : 0;
 
   const sharedLeads = leads.filter((l) => l.source === "Shared");
@@ -172,17 +160,27 @@ export default function DashboardPage() {
   const lostDeals = deals.filter((d) => d.stage === "Closed Lost");
   const refusedDeals = deals.filter((d) => d.status === "Refused");
   const closingRate =
-    deals.length > 0 ? ((wonDeals.length / deals.length) * 100).toFixed(2) : "0.00";
+    deals.length > 0
+      ? ((wonDeals.length / deals.length) * 100).toFixed(2)
+      : "0.00";
 
-  // D4 & D5 Fix: Compute Top sales partners directly from live Closed Won deals
+  const totalSourcedBase = wonDeals.reduce(
+    (sum, d) => sum + Number(d.amountBase || 0),
+    0
+  );
+  const totalCommissionsBase = rewards
+    .filter((r) => r.status !== "Refused" && Number(r.amountBase || 0) > 0)
+    .reduce((sum, r) => sum + Number(r.amountBase || 0), 0);
+
+  // Compute Top sales partners directly from live Closed Won deals
   const topSalesPartners = [...partners]
     .map((p) => {
       const pDeals = deals.filter(
         (d) => d.partnerName === p.name || d.partnerId === p.id
       );
       const pWon = pDeals.filter((d) => d.stage === "Closed Won");
-      const wonAmountSgd = pWon.reduce(
-        (sum, d) => sum + Number(d.amountSgd || 0),
+      const wonAmountBase = pWon.reduce(
+        (sum, d) => sum + Number(d.amountBase || 0),
         0
       );
       const winRate =
@@ -190,20 +188,19 @@ export default function DashboardPage() {
       return {
         ...p,
         computedWonCount: pWon.length,
-        computedWonAmountSgd: wonAmountSgd,
+        computedWonAmountBase: wonAmountBase,
         computedWinRate: winRate,
       };
     })
     .sort(
       (a, b) =>
-        b.computedWonAmountSgd - a.computedWonAmountSgd ||
+        b.computedWonAmountBase - a.computedWonAmountBase ||
         b.computedWonCount - a.computedWonCount
     )
     .slice(0, 8);
 
   return (
     <div className="max-w-[1440px] mx-auto px-6 py-6 space-y-6">
-      {/* Dashboard Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
@@ -266,7 +263,7 @@ export default function DashboardPage() {
                 <p className="text-2xl font-extrabold text-emerald-700">
                   {partnerAcceptedPct}%
                 </p>
-                <p className="text-xs text-slate-600 mt-0.5">Accepted leads</p>
+                <p className="text-xs text-slate-600 mt-0.5">Accepted rate</p>
               </div>
             </div>
           </div>
@@ -303,21 +300,22 @@ export default function DashboardPage() {
                 <p className="text-2xl font-extrabold text-emerald-700">
                   {sharedAcceptedPct}%
                 </p>
-                <p className="text-xs text-slate-600 mt-0.5">Accepted leads</p>
+                <p className="text-xs text-slate-600 mt-0.5">Accepted rate</p>
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Transactions 12-Month Stacked Bar Chart */}
+      {/* Transactions 12-Month Bar Chart */}
       {activeWidgets.includes("transactions_chart") && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-1">
             <div>
               <h2 className="font-bold text-sm text-slate-900">Transactions</h2>
               <p className="text-xs text-slate-500">
-                Sum of transactions by partner over the last 12 months · Amount (SGD)
+                Sum of transactions by partner over the last 12 months · Amount (
+                {baseCurrency})
               </p>
             </div>
             <Link
@@ -329,9 +327,12 @@ export default function DashboardPage() {
           </div>
 
           <div className="mt-6 h-48 flex items-end justify-between gap-2 pt-6 pb-2 px-2 border-b border-slate-200">
-            {MONTHS_12.map((m) => {
+            {months12.map((m) => {
               const monthTxs = transactions.filter((t) => t.monthKey === m);
-              const sum = monthTxs.reduce((acc, t) => acc + t.amountSgd, 0);
+              const sum = monthTxs.reduce(
+                (acc, t) => acc + Number(t.amountBase || 0),
+                0
+              );
               const maxBar = 32000;
               const pct = Math.min(100, Math.round((sum / maxBar) * 100));
               return (
@@ -340,7 +341,9 @@ export default function DashboardPage() {
                   className="flex-1 flex flex-col items-center justify-end h-full group"
                 >
                   <span className="text-[10px] font-semibold text-blue-700 mb-1">
-                    {sum > 0 ? `SGD ${(sum / 1000).toFixed(1)}K` : "0"}
+                    {sum > 0
+                      ? `${baseCurrency} ${(sum / 1000).toFixed(1)}K`
+                      : "0"}
                   </span>
                   <div className="w-full max-w-[42px] bg-slate-100 rounded-t-md h-32 flex items-end overflow-hidden">
                     <div
@@ -388,16 +391,20 @@ export default function DashboardPage() {
                   <th className="py-2.5 px-3 font-semibold">Partner</th>
                   <th className="py-2.5 px-3 font-semibold">From Activity</th>
                   <th className="py-2.5 px-3 font-semibold">Amount</th>
-                  <th className="py-2.5 px-3 font-semibold">Amount (SGD)</th>
+                  <th className="py-2.5 px-3 font-semibold">
+                    Amount ({baseCurrency})
+                  </th>
                   <th className="py-2.5 px-3 font-semibold">Status</th>
-                  <th className="py-2.5 px-3 font-semibold text-right">Validation</th>
+                  <th className="py-2.5 px-3 font-semibold text-right">
+                    Validation
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {pendingRewards.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-6 text-center text-slate-400">
-                      All pending rewards have been validated!
+                      No pending rewards awaiting validation.
                     </td>
                   </tr>
                 ) : (
@@ -409,12 +416,14 @@ export default function DashboardPage() {
                       <td className="py-2.5 px-3 font-medium text-slate-900">
                         {r.partnerName}
                       </td>
-                      <td className="py-2.5 px-3 text-slate-600">{r.fromActivity}</td>
+                      <td className="py-2.5 px-3 text-slate-600">
+                        {r.fromActivity}
+                      </td>
                       <td className="py-2.5 px-3 font-medium">
                         {r.currency} {r.amount.toLocaleString()}
                       </td>
                       <td className="py-2.5 px-3 font-semibold text-slate-900">
-                        SGD {r.amountSgd.toLocaleString()}
+                        {baseCurrency} {r.amountBase.toLocaleString()}
                       </td>
                       <td className="py-2.5 px-3">
                         <StatusBadge status={r.status} />
@@ -460,7 +469,9 @@ export default function DashboardPage() {
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h2 className="font-bold text-sm text-slate-900">Latest deals</h2>
+                <h2 className="font-bold text-sm text-slate-900">
+                  Latest deals
+                </h2>
                 <p className="text-xs text-slate-500">
                   Latest deals registered by your partners
                 </p>
@@ -510,7 +521,9 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between mb-3">
               <div>
                 <div className="flex items-center space-x-2">
-                  <h2 className="font-bold text-sm text-slate-900">Current leads</h2>
+                  <h2 className="font-bold text-sm text-slate-900">
+                    Current leads
+                  </h2>
                   <span className="px-2 py-0.5 text-[11px] font-bold bg-blue-50 text-blue-700 rounded-full">
                     {leads.length} leads
                   </span>
@@ -601,10 +614,12 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex items-center space-x-3">
                       <span className="text-slate-500">
-                        {p.computedWonCount} won deals ({p.computedWinRate}% win rate)
+                        {p.computedWonCount} won deals ({p.computedWinRate}% win
+                        rate)
                       </span>
                       <span className="font-bold text-blue-700">
-                        SGD {p.computedWonAmountSgd.toLocaleString()}
+                        {baseCurrency}{" "}
+                        {p.computedWonAmountBase.toLocaleString()}
                       </span>
                     </div>
                   </div>
@@ -676,7 +691,7 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Optional Extra Enabled Widgets from Add Widget Drawer */}
+      {/* Optional Extra Enabled Widgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {activeWidgets.includes("global_roi") && (
           <div className="bg-white rounded-xl border border-blue-200 p-5 shadow-sm">
@@ -687,9 +702,14 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-500 mb-3">
               Sourced Revenue vs Commission Rewards
             </p>
-            <p className="text-3xl font-extrabold text-slate-900">11.4x ROI</p>
+            <p className="text-3xl font-extrabold text-slate-900">
+              {totalCommissionsBase > 0
+                ? `${(totalSourcedBase / totalCommissionsBase).toFixed(1)}x ROI`
+                : "0.0x ROI"}
+            </p>
             <p className="text-xs text-emerald-700 mt-1 font-medium">
-              SGD 301,700 Sourced · SGD 26,450 Commissions
+              {baseCurrency} {totalSourcedBase.toLocaleString()} Sourced ·{" "}
+              {baseCurrency} {totalCommissionsBase.toLocaleString()} Commissions
             </p>
           </div>
         )}
@@ -701,16 +721,20 @@ export default function DashboardPage() {
               <span>Top Referral Links</span>
             </div>
             <div className="space-y-2 text-xs">
-              {trackingLinks.map((lnk) => (
-                <div key={lnk.id} className="flex justify-between">
-                  <span className="truncate font-medium text-slate-800">
-                    {lnk.name}
-                  </span>
-                  <span className="font-bold text-blue-700">
-                    {lnk.uniqueVisitors} visits
-                  </span>
-                </div>
-              ))}
+              {trackingLinks.length === 0 ? (
+                <p className="text-slate-400">No tracking links yet.</p>
+              ) : (
+                trackingLinks.map((lnk) => (
+                  <div key={lnk.id} className="flex justify-between">
+                    <span className="truncate font-medium text-slate-800">
+                      {lnk.name}
+                    </span>
+                    <span className="font-bold text-blue-700">
+                      {lnk.uniqueVisitors} visits
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
@@ -722,19 +746,27 @@ export default function DashboardPage() {
               <span>Top Help Center Articles</span>
             </div>
             <div className="space-y-2 text-xs">
-              {manageItems
-                .filter((m) => m.category === "help_articles")
-                .map((a) => (
-                  <div key={a.id} className="truncate text-slate-700 font-medium">
-                    • {a.name}
-                  </div>
-                ))}
+              {manageItems.filter((m) => m.category === "help_articles")
+                .length === 0 ? (
+                <p className="text-slate-400">No help articles published yet.</p>
+              ) : (
+                manageItems
+                  .filter((m) => m.category === "help_articles")
+                  .map((a) => (
+                    <div
+                      key={a.id}
+                      className="truncate text-slate-700 font-medium"
+                    >
+                      • {a.name}
+                    </div>
+                  ))
+              )}
             </div>
           </div>
         )}
       </div>
 
-      {/* Add Widget Slide-Over Drawer (9 Categories, 23 Widget Types) */}
+      {/* Add Widget Slide-Over Drawer */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex justify-end">
           <div className="w-full max-w-lg bg-white h-full shadow-2xl flex flex-col">
@@ -742,7 +774,7 @@ export default function DashboardPage() {
               <div>
                 <h3 className="font-bold text-base">Add widget to Dashboard</h3>
                 <p className="text-xs text-blue-100">
-                  Toggle widgets across all 9 PRM analytics categories
+                  Toggle widgets across all PRM analytics categories
                 </p>
               </div>
               <button onClick={() => setDrawerOpen(false)}>
@@ -772,7 +804,9 @@ export default function DashboardPage() {
                             <p className="text-xs font-bold text-slate-900">
                               {w.name}
                             </p>
-                            <p className="text-[11px] text-slate-500">{w.desc}</p>
+                            <p className="text-[11px] text-slate-500">
+                              {w.desc}
+                            </p>
                           </div>
                           <span
                             className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center space-x-1 ${

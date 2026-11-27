@@ -4,17 +4,30 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { EntityListToolbar, StatusBadge } from "@/components/SharedEngines";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 
 export default function PartnersListPage() {
-  const { partners, setGlobalModal } = usePrm();
+  const { partners, settings, session, setGlobalModal } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
 
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
+
   const filtered = partners.filter((p) => {
-    if (activeView === "My Partners" && p.owner !== "Alex Morgan") return false;
-    if (activeView === "Pending Applications" && p.status !== "Pending") return false;
-    if (activeView === "Platform Partner" && p.partnerType !== "Technology Partner")
+    // §3.5.1: Filter on the signed-in user's id
+    if (activeView === "My Partners" && p.ownerId !== session?.userId) {
       return false;
+    }
+    if (activeView === "Pending Applications" && p.status !== "Pending") {
+      return false;
+    }
+    if (
+      activeView === "Platform Partner" &&
+      p.partnerType !== "Technology Partner"
+    ) {
+      return false;
+    }
     if (
       search &&
       !`${p.name} ${p.programName} ${p.owner} ${p.groupName}`
@@ -79,53 +92,81 @@ export default function PartnersListPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 whitespace-nowrap">
-              {filtered.map((p) => (
-                <tr key={p.id} className="hover:bg-blue-50/40">
-                  <td className="py-3 px-3.5 font-bold text-blue-700">
-                    <Link href={`/partners/${p.id}`} className="hover:underline">
-                      {p.name}
-                    </Link>
-                  </td>
-                  <td className="py-3 px-3 text-slate-700">{p.owner}</td>
-                  <td className="py-3 px-3 text-slate-600">{p.groupName}</td>
-                  <td className="py-3 px-3 text-blue-600 font-medium">
-                    <Link
-                      href={`/programs/${p.programId || "prog-strategic"}`}
-                      className="hover:underline"
-                    >
-                      {p.programName}
-                    </Link>
-                  </td>
-                  <td className="py-3 px-3">
-                    <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200">
-                      {p.qualifyingLevel}
-                    </span>
-                  </td>
-                  <td className="py-3 px-3">
-                    <StatusBadge status={p.status} />
-                  </td>
-                  <td className="py-3 px-3">
-                    <StatusBadge status={p.onboardingStatus} />
-                  </td>
-                  <td className="py-3 px-3 text-slate-600">{p.onboardingPipeline}</td>
-                  <td className="py-3 px-3 text-slate-500">{p.activeSince}</td>
-                  <td className="py-3 px-3 text-right font-semibold">
-                    {p.submittedLeads365d}
-                  </td>
-                  <td className="py-3 px-3 text-right font-semibold">
-                    {p.registeredDeals365d}
-                  </td>
-                  <td className="py-3 px-3 text-right font-medium text-blue-700">
-                    SGD {p.pendingRewardsAll.toLocaleString()}
-                  </td>
-                  <td className="py-3 px-3 text-right font-bold text-slate-900">
-                    SGD {p.sourcedRevenue365d.toLocaleString()}
-                  </td>
-                  <td className="py-3 px-3.5 text-right text-slate-700 font-medium">
-                    SGD {p.influencedRev365d.toLocaleString()}
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={14} className="py-8 text-center text-slate-400">
+                    No partners found.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filtered.map((p) => (
+                  <tr key={p.id} className="hover:bg-blue-50/40">
+                    <td className="py-3 px-3.5 font-bold text-blue-700">
+                      <Link
+                        href={`/partners/${p.id}`}
+                        className="hover:underline"
+                      >
+                        {p.name}
+                      </Link>
+                    </td>
+                    <td className="py-3 px-3 text-slate-700">
+                      {p.owner || "—"}
+                    </td>
+                    <td className="py-3 px-3 text-slate-600">
+                      {p.groupName || "—"}
+                    </td>
+                    <td className="py-3 px-3 text-blue-600 font-medium">
+                      {p.programId ? (
+                        <Link
+                          href={`/programs/${p.programId}`}
+                          className="hover:underline"
+                        >
+                          {p.programName || p.programId}
+                        </Link>
+                      ) : (
+                        <span className="text-slate-600">
+                          {p.programName || "—"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3">
+                      <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200">
+                        {p.qualifyingLevel || "Standard"}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3">
+                      <StatusBadge status={p.status} />
+                    </td>
+                    <td className="py-3 px-3">
+                      <StatusBadge status={p.onboardingStatus} />
+                    </td>
+                    <td className="py-3 px-3 text-slate-600">
+                      {p.onboardingPipeline || "—"}
+                    </td>
+                    <td className="py-3 px-3 text-slate-500">
+                      {p.activeSince || "—"}
+                    </td>
+                    <td className="py-3 px-3 text-right font-semibold">
+                      {p.submittedLeads365d}
+                    </td>
+                    <td className="py-3 px-3 text-right font-semibold">
+                      {p.registeredDeals365d}
+                    </td>
+                    <td className="py-3 px-3 text-right font-medium text-blue-700">
+                      {baseCurrency}{" "}
+                      {Number(p.pendingRewardsAll || 0).toLocaleString()}
+                    </td>
+                    <td className="py-3 px-3 text-right font-bold text-slate-900">
+                      {baseCurrency}{" "}
+                      {Number(p.sourcedRevenue365d || 0).toLocaleString()}
+                    </td>
+                    <td className="py-3 px-3.5 text-right text-slate-700 font-medium">
+                      {baseCurrency}{" "}
+                      {Number(p.influencedRev365d || 0).toLocaleString()}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

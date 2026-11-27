@@ -3,16 +3,17 @@
 import React from "react";
 import Link from "next/link";
 import { X, Mail, Sparkles, ExternalLink } from "lucide-react";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 
 export function AppShellDrawersAndModals({
   openMenu,
   closeMenus,
-  showToast,
   sentEmails,
   globalModal,
   setGlobalModal,
   programs,
   partners,
+  baseCurrency,
   partnerForm,
   setPartnerForm,
   handleCreatePartner,
@@ -27,7 +28,7 @@ export function AppShellDrawersAndModals({
 }: {
   openMenu: string | null;
   closeMenus: () => void;
-  showToast: (msg: string) => void;
+  showToast?: (msg: string) => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sentEmails: any[];
   globalModal: string | null;
@@ -36,6 +37,7 @@ export function AppShellDrawersAndModals({
   programs: any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   partners: any[];
+  baseCurrency: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   partnerForm: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -180,7 +182,7 @@ export function AppShellDrawersAndModals({
                   date: "Oct 2026",
                   tag: "Payouts",
                   title: "Automated Multi-Currency Threshold Payouts & Self-Invoicing",
-                  desc: "Batch pending rewards into SGD, USD, EUR, or MYR settlement runs automatically.",
+                  desc: "Batch validated rewards into multi-currency settlement runs automatically.",
                 },
               ].map((item, idx) => (
                 <div
@@ -229,7 +231,7 @@ export function AppShellDrawersAndModals({
                   onChange={(e) =>
                     setPartnerForm({ ...partnerForm, name: e.target.value })
                   }
-                  placeholder="e.g. CloudScale Asia Consulting"
+                  placeholder="Acme Ltd"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>
@@ -239,7 +241,7 @@ export function AppShellDrawersAndModals({
                     Partner program
                   </label>
                   <select
-                    value={partnerForm.programId}
+                    value={partnerForm.programId || programs[0]?.id || ""}
                     onChange={(e) =>
                       setPartnerForm({
                         ...partnerForm,
@@ -248,18 +250,22 @@ export function AppShellDrawersAndModals({
                     }
                     className="w-full px-2.5 py-2 border border-slate-300 rounded-lg text-xs"
                   >
-                    {programs.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
+                    {programs.length === 0 ? (
+                      <option value="">No programs yet</option>
+                    ) : (
+                      programs.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     Country
                   </label>
-                  <select
+                  <input
                     value={partnerForm.country}
                     onChange={(e) =>
                       setPartnerForm({
@@ -267,15 +273,9 @@ export function AppShellDrawersAndModals({
                         country: e.target.value,
                       })
                     }
+                    placeholder="Country"
                     className="w-full px-2.5 py-2 border border-slate-300 rounded-lg text-xs"
-                  >
-                    <option>Singapore</option>
-                    <option>Malaysia</option>
-                    <option>Australia</option>
-                    <option>United Kingdom</option>
-                    <option>United States</option>
-                    <option>Japan</option>
-                  </select>
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
@@ -447,7 +447,7 @@ export function AppShellDrawersAndModals({
                     : "Source partner *"}
                 </label>
                 <select
-                  value={leadForm.sourcePartnerName}
+                  value={leadForm.sourcePartnerName || partners[0]?.name || ""}
                   onChange={(e) =>
                     setLeadForm({
                       ...leadForm,
@@ -456,11 +456,15 @@ export function AppShellDrawersAndModals({
                   }
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 >
-                  {partners.map((p) => (
-                    <option key={p.id} value={p.name}>
-                      {p.name}
-                    </option>
-                  ))}
+                  {partners.length === 0 ? (
+                    <option value="">No partners yet</option>
+                  ) : (
+                    partners.map((p) => (
+                      <option key={p.id} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -711,17 +715,22 @@ export function AppShellDrawersAndModals({
                     Select Associated Partner *
                   </label>
                   <select
-                    value={dealForm.partnerName}
+                    value={dealForm.partnerName || partners[0]?.name || ""}
                     onChange={(e) =>
                       setDealForm({ ...dealForm, partnerName: e.target.value })
                     }
                     className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm"
                   >
-                    {partners.map((p) => (
-                      <option key={p.id} value={p.name}>
-                        {p.name} ({p.qualifyingLevel})
-                      </option>
-                    ))}
+                    {partners.length === 0 ? (
+                      <option value="">No partners yet</option>
+                    ) : (
+                      partners.map((p) => (
+                        <option key={p.id} value={p.name}>
+                          {p.name}
+                          {p.qualifyingLevel ? ` (${p.qualifyingLevel})` : ""}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
               )}
@@ -738,7 +747,7 @@ export function AppShellDrawersAndModals({
                       onChange={(e) =>
                         setDealForm({ ...dealForm, name: e.target.value })
                       }
-                      placeholder="e.g. ENT - Marina Hospitality Loyalty Cloud"
+                      placeholder="Acme Enterprise Rollout"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                     />
                   </div>
@@ -750,10 +759,13 @@ export function AppShellDrawersAndModals({
                       <input
                         required
                         type="number"
+                        min="0.01"
+                        step="0.01"
                         value={dealForm.amount}
                         onChange={(e) =>
                           setDealForm({ ...dealForm, amount: e.target.value })
                         }
+                        placeholder="Enter amount"
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                       />
                     </div>
@@ -762,16 +774,17 @@ export function AppShellDrawersAndModals({
                         Currency
                       </label>
                       <select
-                        value={dealForm.currency}
+                        value={dealForm.currency || baseCurrency}
                         onChange={(e) =>
                           setDealForm({ ...dealForm, currency: e.target.value })
                         }
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                       >
-                        <option>SGD</option>
-                        <option>USD</option>
-                        <option>EUR</option>
-                        <option>MYR</option>
+                        {SUPPORTED_CURRENCIES.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -834,7 +847,7 @@ export function AppShellDrawersAndModals({
                       onChange={(e) =>
                         setDealForm({ ...dealForm, company: e.target.value })
                       }
-                      placeholder="e.g. Marina Bay Grand Holdings"
+                      placeholder="Acme Ltd"
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                     />
                   </div>
@@ -852,7 +865,7 @@ export function AppShellDrawersAndModals({
                             clientName: e.target.value,
                           })
                         }
-                        placeholder="e.g. Raymond Sterling"
+                        placeholder="Jane Doe"
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                       />
                     </div>

@@ -4,22 +4,44 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePrm } from "@/context/PrmContext";
 import { EntityListToolbar, StatusBadge } from "@/components/SharedEngines";
+import {
+  SUPPORTED_CURRENCIES,
+  currentIsoDateInTimezone,
+} from "@/lib/prmEngine";
 import { X } from "lucide-react";
 
 export default function BusinessPlansListPage() {
-  const { businessPlans, partners, mutate } = usePrm();
+  const { businessPlans, partners, settings, mutate } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
 
+  const acct = settings?.account_settings || {};
+  const baseCurrency = acct.mainCurrency || SUPPORTED_CURRENCIES[0];
+
   const [form, setForm] = useState({
     name: "",
-    partnerName: "Apex Cloud Solutions Pte Ltd",
+    partnerName: "",
     description: "",
-    startDate: "2026-11-01",
-    endDate: "2027-10-31",
+    startDate: "",
+    endDate: "",
+    targetRevBase: "",
     status: "Active",
   });
+
+  const openModal = () => {
+    const start = currentIsoDateInTimezone(acct.timezone);
+    setForm({
+      name: "",
+      partnerName: partners[0]?.name || "",
+      description: "",
+      startDate: start,
+      endDate: "",
+      targetRevBase: "",
+      status: "Active",
+    });
+    setModalOpen(true);
+  };
 
   const filtered = businessPlans.filter((bp) => {
     if (activeView !== "All" && bp.status !== activeView) return false;
@@ -42,7 +64,6 @@ export default function BusinessPlansListPage() {
       `Joint Business Plan "${form.name}" created!`
     );
     setModalOpen(false);
-    setForm({ ...form, name: "", description: "" });
   };
 
   return (
@@ -57,7 +78,7 @@ export default function BusinessPlansListPage() {
         onSearchChange={setSearch}
         dateFilterLabel="Start date"
         primaryActionLabel="Add a new business plan"
-        onPrimaryAction={() => setModalOpen(true)}
+        onPrimaryAction={openModal}
       />
 
       <div className="max-w-[1440px] mx-auto px-6 py-5">
@@ -71,6 +92,9 @@ export default function BusinessPlansListPage() {
                 <th className="py-3 px-3 font-semibold">Status</th>
                 <th className="py-3 px-3 font-semibold">Start date</th>
                 <th className="py-3 px-3 font-semibold">End date</th>
+                <th className="py-3 px-3 font-semibold text-right">
+                  Target ({baseCurrency})
+                </th>
                 <th className="py-3 px-4 font-semibold">Achieved %</th>
               </tr>
             </thead>
@@ -78,7 +102,10 @@ export default function BusinessPlansListPage() {
               {filtered.map((bp) => (
                 <tr key={bp.id} className="hover:bg-blue-50/40">
                   <td className="py-3.5 px-4 font-bold text-blue-700">
-                    <Link href={`/business-plans/${bp.id}`} className="hover:underline">
+                    <Link
+                      href={`/business-plans/${bp.id}`}
+                      className="hover:underline"
+                    >
                       {bp.name}
                     </Link>
                     <p className="text-[11px] font-normal text-slate-500">
@@ -89,13 +116,20 @@ export default function BusinessPlansListPage() {
                     {bp.partnerName}
                   </td>
                   <td className="py-3.5 px-3 text-slate-700">
-                    {bp.partnerOwner}
+                    {bp.partnerOwner || "—"}
                   </td>
                   <td className="py-3.5 px-3">
                     <StatusBadge status={bp.status} />
                   </td>
-                  <td className="py-3.5 px-3 text-slate-600">{bp.startDate}</td>
-                  <td className="py-3.5 px-3 text-slate-600">{bp.endDate}</td>
+                  <td className="py-3.5 px-3 text-slate-600">
+                    {bp.startDate || "—"}
+                  </td>
+                  <td className="py-3.5 px-3 text-slate-600">
+                    {bp.endDate || "—"}
+                  </td>
+                  <td className="py-3.5 px-3 text-right font-semibold text-slate-900">
+                    {baseCurrency} {(bp.targetRevBase || 0).toLocaleString()}
+                  </td>
                   <td className="py-3.5 px-4 w-48">
                     <div className="flex items-center space-x-2">
                       <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
@@ -137,27 +171,46 @@ export default function BusinessPlansListPage() {
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g. FY2027 Joint Enterprise Expansion"
+                  placeholder="Joint Annual Growth Plan"
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>
-              <div>
-                <label className="block font-medium text-slate-700 mb-1">
-                  Partner
-                </label>
-                <select
-                  value={form.partnerName}
-                  onChange={(e) =>
-                    setForm({ ...form, partnerName: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                >
-                  {partners.map((p) => (
-                    <option key={p.id} value={p.name}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    Partner *
+                  </label>
+                  <select
+                    required
+                    value={form.partnerName}
+                    onChange={(e) =>
+                      setForm({ ...form, partnerName: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  >
+                    <option value="">Select partner...</option>
+                    {partners.map((p) => (
+                      <option key={p.id} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-700 mb-1">
+                    Target Revenue ({baseCurrency})
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.targetRevBase}
+                    onChange={(e) =>
+                      setForm({ ...form, targetRevBase: e.target.value })
+                    }
+                    placeholder="0"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -197,6 +250,7 @@ export default function BusinessPlansListPage() {
                   onChange={(e) =>
                     setForm({ ...form, description: e.target.value })
                   }
+                  placeholder="Goals, milestones, and enablement actions..."
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                 />
               </div>

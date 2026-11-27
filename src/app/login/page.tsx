@@ -14,7 +14,6 @@ export default function CoworkerLoginPage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [showDevLogins, setShowDevLogins] = useState(false);
   const [branding, setBranding] = useState({
     accountName: "R-PRM",
     logoText: "R",
@@ -29,10 +28,9 @@ export default function CoworkerLoginPage() {
           window.location.href = "/setup";
           return;
         }
-        setShowDevLogins(Boolean(d?.showDevLogins));
         if (d?.branding) setBranding(d.branding);
       })
-      .catch(() => setShowDevLogins(false));
+      .catch(() => {});
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -126,7 +124,7 @@ export default function CoworkerLoginPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@r-prm.example.com"
+              placeholder="admin@company.com"
               className="w-full px-3 py-2 border border-slate-300 rounded-lg"
             />
           </div>
@@ -163,27 +161,10 @@ export default function CoworkerLoginPage() {
           </button>
         </form>
 
-        {showDevLogins && (
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
-            <p className="font-bold text-slate-800">
-              Local Environment Accounts (Role assigned by database):
-            </p>
-            <p>
-              • Admin: <code>alex@r-prm.example.com</code>
-            </p>
-            <p>
-              • Member: <code>sarah@r-prm.example.com</code>
-            </p>
-            <p>
-              • Password: configured via <code>SEED_ADMIN_PASSWORD</code> in <code>.env</code>
-            </p>
-          </div>
-        )}
-
         <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-slate-500">
           <span className="flex items-center space-x-1">
             <Shield className="w-3.5 h-3.5 text-blue-600" />
-            <span>SAML 2.0 &amp; TOTP Ready</span>
+            <span>TOTP MFA Supported</span>
           </span>
           <Link href="/p/login" className="text-blue-600 font-semibold">
             Partner Portal Sign In →

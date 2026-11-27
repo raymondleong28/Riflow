@@ -4,10 +4,50 @@ import {
   convertWithDatedFx,
   generateRandomLeadFormToken,
   normalizeAccountKey,
+  resolveExplicitProgramAndPipeline,
+  SUPPORTED_CURRENCIES,
   toMinorUnits,
 } from "./prmEngine";
 import { issuePartnerActivationLink, RprmSession } from "./authSession";
 import { encryptBankDetails, sendEmailViaConnector } from "./connectors";
+
+export interface WorkspaceAccountSettings {
+  accountName: string;
+  mainCurrency: string;
+  timezone: string;
+  defaultOwnerId: string | null;
+  defaultOwnerName: string;
+  legalEntityName: string;
+  taxId: string;
+  billingAddress: string;
+}
+
+export async function getWorkspaceAccountSettings(): Promise<WorkspaceAccountSettings> {
+  const row = await prisma.appSetting.findUnique({
+    where: { key: "account_settings" },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let parsed: Record<string, any> = {};
+  if (row?.valueJson) {
+    try {
+      parsed = JSON.parse(row.valueJson);
+    } catch {
+      parsed = {};
+    }
+  }
+  return {
+    accountName: String(parsed.accountName || "Workspace").trim(),
+    mainCurrency: String(parsed.mainCurrency || SUPPORTED_CURRENCIES[0])
+      .trim()
+      .toUpperCase(),
+    timezone: String(parsed.timezone || "UTC").trim(),
+    defaultOwnerId: parsed.defaultOwnerId ? String(parsed.defaultOwnerId) : null,
+    defaultOwnerName: String(parsed.defaultOwnerName || "").trim(),
+    legalEntityName: String(parsed.legalEntityName || "").trim(),
+    taxId: String(parsed.taxId || "").trim(),
+    billingAddress: String(parsed.billingAddress || "").trim(),
+  };
+}
 
 export async function writeAudit({
   session,
@@ -27,7 +67,7 @@ export async function writeAudit({
 }) {
   await prisma.auditLog.create({
     data: {
-      actor: session.email || "Alex Morgan",
+      actor: session.email || session.name || "system",
       actorRole: `${session.identityType} (${session.role})`,
       action,
       objectType,
@@ -38,7 +78,7 @@ export async function writeAudit({
   });
 }
 
-// §16.2 S9, S11, S12 & §16.3 G2, G5: Send email via unified Email Connector with escaped HTML + real single-use activation link
+// Send email via unified Email Connector with escaped HTML + real single-use activation link + {{workspace.name}} merge field
 export async function sendAndLogTransactionalEmail({
   to,
   subject,
@@ -60,6 +100,7 @@ export async function sendAndLogTransactionalEmail({
     role: string;
   };
 }) {
+  const ws = await getWorkspaceAccountSettings();
   let activationUrl = "";
   let rawToken = "";
   let expiresAt = "";
@@ -77,7 +118,8 @@ export async function sendAndLogTransactionalEmail({
     expiresAt = issued.expiresAt.toISOString();
   }
 
-  const finalMergeFields = {
+  const finalMergeFields: Record<string, string> = {
+    "workspace.name": ws.accountName,
     ...mergeFields,
     "user.activationUrl": activationUrl,
   };
@@ -121,7 +163,7 @@ export async function sendAndLogTransactionalEmail({
   };
 }
 
-// §16.3 G9 & §16.4 P4: CSV Parser & Multi-Object Importer with dryRun preview, row-level errors, and audit log
+// CSV Parser & Multi-Object Importer with dryRun preview, row-level errors, and audit log
 export function parseCsvText(csvText: string): Array<Record<string, string>> {
   const lines = String(csvText || "")
     .split(/\r?\n/)
@@ -146,6 +188,8 @@ export async function handleCsvImportMutation(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload: any
 ) {
+  const ws = await getWorkspaceAccountSettings();
+  const allPrograms = await prisma.program.findMany();
   const objectType = String(payload.objectType || "partners").toLowerCase();
   const dryRun = Boolean(payload.dryRun);
   const rows: Array<Record<string, string>> = Array.isArray(payload.rows)
@@ -153,39 +197,78 @@ export async function handleCsvImportMutation(
     : parseCsvText(payload.csvText || "");
 
   const validRows: Array<Record<string, string>> = [];
-  const rowErrors: Array<{ rowNumber: number; error: string }> = [];
+  const rowErrors: Array<{ rowNumber: number; row?: number; error: string }> = [];
 
   rows.forEach((r, idx) => {
     const rowNumber = idx + 2;
-    if (objectType === "partners" && !r.name) {
-      rowErrors.push({ rowNumber, error: "Missing required column: name" });
-    } else if (objectType === "contacts" && (!r.name || !r.email)) {
-      rowErrors.push({ rowNumber, error: "Missing required columns: name, email" });
+    if (objectType === "partners") {
+      if (!r.name) {
+        rowErrors.push({
+          rowNumber,
+          row: rowNumber,
+          error: "Missing required column: name",
+        });
+      } else if (!r.programId && !r.programName && allPrograms.length > 0) {
+        // Check if programId or programName is explicitly supplied when required
+        try {
+          resolveExplicitProgramAndPipeline(
+            { programId: r.programId, programName: r.programName },
+            allPrograms
+          );
+          validRows.push(r);
+        } catch (err) {
+          rowErrors.push({
+            rowNumber,
+            row: rowNumber,
+            error: String(err),
+          });
+        }
+      } else {
+        validRows.push(r);
+      }
+    } else if (objectType === "contacts" && (!r.name || !r.email || !r.partnerName)) {
+      rowErrors.push({
+        rowNumber,
+        row: rowNumber,
+        error: "Missing required columns: name, email, partnerName",
+      });
     } else if (objectType === "leads" && (!r.firstName || !r.company || !r.email)) {
       rowErrors.push({
         rowNumber,
+        row: rowNumber,
         error: "Missing required columns: firstName, company, email",
       });
     } else if (objectType === "deals" && (!r.name || !r.company || !r.amount)) {
       rowErrors.push({
         rowNumber,
+        row: rowNumber,
         error: "Missing required columns: name, company, amount",
       });
     } else if (objectType === "customers" && (!r.name || !r.email)) {
-      rowErrors.push({ rowNumber, error: "Missing required columns: name, email" });
-    } else if (objectType === "transactions" && (!r.name || !r.amount || !r.partnerName)) {
       rowErrors.push({
         rowNumber,
+        row: rowNumber,
+        error: "Missing required columns: name, email",
+      });
+    } else if (
+      objectType === "transactions" &&
+      (!r.name || !r.amount || !r.partnerName)
+    ) {
+      rowErrors.push({
+        rowNumber,
+        row: rowNumber,
         error: "Missing required columns: name, amount, partnerName",
       });
     } else if (objectType === "rewards" && (!r.partnerName || !r.amount)) {
       rowErrors.push({
         rowNumber,
+        row: rowNumber,
         error: "Missing required columns: partnerName, amount",
       });
     } else if (objectType === "payouts" && (!r.partnerName || !r.payoutNumber)) {
       rowErrors.push({
         rowNumber,
+        row: rowNumber,
         error: "Missing required columns: partnerName, payoutNumber",
       });
     } else {
@@ -211,17 +294,33 @@ export async function handleCsvImportMutation(
   for (const r of validRows) {
     if (objectType === "partners") {
       const lf = generateRandomLeadFormToken();
+      let programId: string | null = r.programId || null;
+      let programName = r.programName || "";
+      let onboardingPipeline = "";
+      if (r.programId || r.programName) {
+        const resolved = resolveExplicitProgramAndPipeline(
+          { programId: r.programId, programName: r.programName },
+          allPrograms
+        );
+        programId = resolved.programId;
+        programName = resolved.programName;
+        onboardingPipeline = resolved.onboardingPipeline;
+      }
       await prisma.partner.create({
         data: {
           name: r.name,
-          programId: r.programId || "prog-strategic",
-          programName: r.programName || "R-Cloud Strategic Solution Partners",
-          qualifyingLevel: r.qualifyingLevel || "Silver Tier",
-          country: r.country || "Singapore",
-          currency: r.currency || "SGD",
-          contactFirstName: r.contactFirstName || "Main",
-          contactLastName: r.contactLastName || "Contact",
-          contactEmail: r.contactEmail || "contact@partner.example.com",
+          ownerId: session.userId,
+          owner: session.name,
+          programId,
+          programName,
+          onboardingPipeline,
+          qualifyingLevel: r.qualifyingLevel || "",
+          country: r.country || "",
+          currency: (r.currency || ws.mainCurrency).toUpperCase(),
+          contactFirstName: r.contactFirstName || "",
+          contactLastName: r.contactLastName || "",
+          contactEmail: r.contactEmail || "",
+          status: r.status || "Active",
           leadFormTokenHash: lf.tokenHash,
           leadFormTokenCipher: encryptBankDetails(lf.rawToken),
           bankDetailsJson: r.bankDetailsJson
@@ -235,9 +334,9 @@ export async function handleCsvImportMutation(
         data: {
           name: r.name,
           email: r.email,
-          jobTitle: r.jobTitle || "Partner Contact",
+          jobTitle: r.jobTitle || "",
           phone: r.phone || "",
-          partnerName: r.partnerName || "Apex Cloud Solutions Pte Ltd",
+          partnerName: r.partnerName,
           role: r.role || "Sales Rep",
         },
       });
@@ -246,28 +345,37 @@ export async function handleCsvImportMutation(
       await prisma.lead.create({
         data: {
           firstName: r.firstName,
-          lastName: r.lastName || "Contact",
+          lastName: r.lastName || "",
           company: r.company,
           email: r.email,
-          country: r.country || "Singapore",
-          sourcePartnerName: r.sourcePartnerName || "Apex Cloud Solutions Pte Ltd",
-          assignedPartner: r.sourcePartnerName || "Apex Cloud Solutions Pte Ltd",
+          country: r.country || "",
+          ownerId: session.userId,
+          owner: session.name,
+          sourcePartnerName: r.sourcePartnerName || "",
+          assignedPartner: r.assignedPartner || r.sourcePartnerName || "",
         },
       });
       importedCount++;
     } else if (objectType === "deals") {
-      const amt = Number(r.amount) || 10000;
-      const fx = convertWithDatedFx(amt, r.currency || "SGD");
+      const amt = Number(r.amount);
+      if (!Number.isFinite(amt) || amt <= 0) continue;
+      const fx = convertWithDatedFx(
+        amt,
+        r.currency || ws.mainCurrency,
+        ws.mainCurrency
+      );
       await prisma.deal.create({
         data: {
           name: r.name,
+          ownerId: session.userId,
+          owner: session.name,
           company: r.company,
           clientName: r.clientName || r.company,
           amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgdMinor,
-          partnerName: r.partnerName || "Apex Cloud Solutions Pte Ltd",
-          sourcePartnerName: r.partnerName || "Apex Cloud Solutions Pte Ltd",
+          amountBase: fx.amountBaseMinor,
+          partnerName: r.partnerName || "",
+          sourcePartnerName: r.sourcePartnerName || r.partnerName || "",
           stage: r.stage || "Discovery Stage",
         },
       });
@@ -277,45 +385,62 @@ export async function handleCsvImportMutation(
         data: {
           name: r.name,
           email: r.email,
-          sourcePartnerName: r.sourcePartnerName || "Apex Cloud Solutions Pte Ltd",
-          revenuesSgd: toMinorUnits(Number(r.revenuesSgd) || 0),
+          sourcePartnerName: r.sourcePartnerName || "",
+          revenuesBase: toMinorUnits(
+            Number(r.revenuesBase ?? r.amount ?? 0) || 0
+          ),
         },
       });
       importedCount++;
     } else if (objectType === "transactions") {
-      const amt = Number(r.amount) || 1000;
-      const fx = convertWithDatedFx(amt, r.currency || "SGD");
+      const amt = Number(r.amount);
+      if (!Number.isFinite(amt) || amt <= 0) continue;
+      const fx = convertWithDatedFx(
+        amt,
+        r.currency || ws.mainCurrency,
+        ws.mainCurrency
+      );
       await prisma.transaction.create({
         data: {
           name: r.name,
           amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgdMinor,
+          amountBase: fx.amountBaseMinor,
           partnerName: r.partnerName,
-          customerName: r.customerName || "Enterprise Client",
-          dealName: r.dealName || "Enterprise Deal",
+          customerName: r.customerName || "",
+          dealName: r.dealName || "",
         },
       });
       importedCount++;
     } else if (objectType === "rewards") {
-      const amt = Number(r.amount) || 500;
-      const fx = convertWithDatedFx(amt, r.currency || "SGD");
+      const amt = Number(r.amount);
+      if (!Number.isFinite(amt) || amt <= 0) continue;
+      const fx = convertWithDatedFx(
+        amt,
+        r.currency || ws.mainCurrency,
+        ws.mainCurrency
+      );
       await prisma.reward.create({
         data: {
-          rewardNumber: r.rewardNumber || `RW-IMP-${Date.now().toString().slice(-4)}`,
+          rewardNumber:
+            r.rewardNumber || `RW-IMP-${Date.now().toString().slice(-4)}`,
           partnerName: r.partnerName,
           recipientName: r.partnerName,
           amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgdMinor,
+          amountBase: fx.amountBaseMinor,
           fromActivity: r.fromActivity || "CSV Import",
           status: r.status || "Pending",
         },
       });
       importedCount++;
     } else if (objectType === "payouts") {
-      const amt = Number(r.amount) || 1000;
-      const fx = convertWithDatedFx(amt, r.currency || "SGD");
+      const amt = Number(r.amount) || 0;
+      const fx = convertWithDatedFx(
+        amt,
+        r.currency || ws.mainCurrency,
+        ws.mainCurrency
+      );
       await prisma.payout.create({
         data: {
           payoutNumber: r.payoutNumber,
@@ -323,7 +448,7 @@ export async function handleCsvImportMutation(
           partnerName: r.partnerName,
           amount: fx.originalAmountMinor,
           currency: fx.currency,
-          amountSgd: fx.amountSgdMinor,
+          amountBase: fx.amountBaseMinor,
           status: r.status || "Ready",
         },
       });
@@ -351,10 +476,23 @@ export async function handleCsvImportMutation(
   });
 }
 
-// §16.4 P4: Account Mapping Two-List CSV Matcher (Eber's account list vs Partner's account list matched by normalized domain & company name)
+// Account Mapping Two-List CSV Matcher (Organisation account list vs Partner account list matched by normalized domain & company name)
 export function matchAccountListsByDomainAndName(
-  eberAccounts: Array<{ accountName: string; domain?: string; type?: string; ownerName?: string; ownerEmail?: string }>,
-  partnerAccounts: Array<{ partnerName: string; accountName: string; domain?: string; type?: string; ownerName?: string; ownerEmail?: string }>
+  orgAccounts: Array<{
+    accountName: string;
+    domain?: string;
+    type?: string;
+    ownerName?: string;
+    ownerEmail?: string;
+  }>,
+  partnerAccounts: Array<{
+    partnerName: string;
+    accountName: string;
+    domain?: string;
+    type?: string;
+    ownerName?: string;
+    ownerEmail?: string;
+  }>
 ) {
   const results: Array<{
     accountName: string;
@@ -378,9 +516,9 @@ export function matchAccountListsByDomainAndName(
       .split("/")[0]
       .trim();
 
-  for (const eber of eberAccounts) {
-    const eKey = normalizeAccountKey(eber.accountName);
-    const eDom = normDomain(eber.domain);
+  for (const orgRow of orgAccounts) {
+    const oKey = normalizeAccountKey(orgRow.accountName);
+    const oDom = normDomain(orgRow.domain);
 
     let matchedPartnerRow: (typeof partnerAccounts)[number] | undefined;
     let matchedBy: "domain" | "company_name" | "none" = "none";
@@ -388,15 +526,15 @@ export function matchAccountListsByDomainAndName(
     for (const prt of partnerAccounts) {
       const pKey = normalizeAccountKey(prt.accountName);
       const pDom = normDomain(prt.domain);
-      if (eDom && pDom && eDom === pDom) {
+      if (oDom && pDom && oDom === pDom) {
         matchedPartnerRow = prt;
         matchedBy = "domain";
         break;
       }
       if (
-        eKey &&
+        oKey &&
         pKey &&
-        (eKey === pKey || eKey.includes(pKey) || pKey.includes(eKey))
+        (oKey === pKey || oKey.includes(pKey) || pKey.includes(oKey))
       ) {
         matchedPartnerRow = prt;
         matchedBy = "company_name";
@@ -405,20 +543,19 @@ export function matchAccountListsByDomainAndName(
     }
 
     results.push({
-      accountName: eber.accountName,
-      type: eber.type || "Prospect",
-      ownerName: eber.ownerName || "Alex Morgan",
-      ownerEmail: eber.ownerEmail || "alex@r-prm.example.com",
+      accountName: orgRow.accountName,
+      type: orgRow.type || "Prospect",
+      ownerName: orgRow.ownerName || "",
+      ownerEmail: orgRow.ownerEmail || "",
       hasOverlap: Boolean(matchedPartnerRow),
       partnerName:
         matchedPartnerRow?.partnerName ||
         partnerAccounts[0]?.partnerName ||
-        "Apex Cloud Solutions Pte Ltd",
+        "",
       partnerAccountName: matchedPartnerRow?.accountName || "",
       partnerAccountType: matchedPartnerRow?.type || "Customer",
-      partnerOwnerName: matchedPartnerRow?.ownerName || "Jordan Lee",
-      partnerOwnerEmail:
-        matchedPartnerRow?.ownerEmail || "jordan.lee@apexcloud.example.com",
+      partnerOwnerName: matchedPartnerRow?.ownerName || "",
+      partnerOwnerEmail: matchedPartnerRow?.ownerEmail || "",
       matchedBy,
     });
   }

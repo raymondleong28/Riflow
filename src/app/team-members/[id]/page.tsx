@@ -9,7 +9,10 @@ import { Send } from "lucide-react";
 export default function TeamMemberDetailPage() {
   const params = useParams();
   const id = String(params?.id || "");
-  const { teamMembers, mutate } = usePrm();
+  const { teamMembers, settings, mutate } = usePrm();
+
+  const workspaceName =
+    settings?.account_settings?.accountName || "Workspace";
 
   const member = teamMembers.find((m) => m.id === id);
   if (!member) {
@@ -44,8 +47,8 @@ export default function TeamMemberDetailPage() {
               "SEND_EMAIL",
               {
                 to: member.email,
-                subject: `Activate your R-PRM Partner Portal (${member.partnerName})`,
-                body: `Hi ${member.name},\n\nClick your fresh time-limited activation link below to sign into the ${member.partnerName} Partner Portal.`,
+                subject: `Activate your {{workspace.name}} Partner Portal (${member.partnerName})`,
+                body: `Hi ${member.name},\n\nClick your fresh time-limited activation link below to sign into the ${workspaceName} Partner Portal for ${member.partnerName}.`,
                 templateName: "Partner Activation Link",
                 portalLink: "/p",
               },
@@ -66,13 +69,13 @@ export default function TeamMemberDetailPage() {
           <span className="text-slate-500">Email</span>
           <span className="font-medium text-blue-600">{member.email}</span>
           <span className="text-slate-500">Job Title</span>
-          <span className="font-medium">{member.jobTitle}</span>
+          <span className="font-medium">{member.jobTitle || "—"}</span>
           <span className="text-slate-500">Phone</span>
-          <span className="font-medium">{member.phone}</span>
+          <span className="font-medium">{member.phone || "—"}</span>
           <span className="text-slate-500">Portal Role</span>
           <span className="font-bold">{member.role}</span>
           <span className="text-slate-500">Invited At</span>
-          <span>{member.invitedAt}</span>
+          <span>{member.invitedAt || "—"}</span>
         </div>
       </div>
     </div>

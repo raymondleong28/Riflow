@@ -195,6 +195,100 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // 4b. Interactive Authenticator MFA Enrolment from Security Tab (§3.5.1: display secret only during enrolment)
+    if (action === "enroll_mfa") {
+      const current = await getActiveServerSession(req);
+      if (!current) {
+        return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+      }
+      const acctRow = await prisma.appSetting.findUnique({
+        where: { key: "account_settings" },
+      });
+      let issuerName = "R-PRM";
+      if (acctRow?.valueJson) {
+        try {
+          issuerName = JSON.parse(acctRow.valueJson).accountName || "R-PRM";
+        } catch {
+          // ignore
+        }
+      }
+      const enrolled = enrollTotpMfa(current.email, issuerName);
+      await prisma.user.update({
+        where: { id: current.userId },
+        data: {
+          mfaSecret: enrolled.secret,
+          recoveryCodesJson: JSON.stringify(enrolled.recoveryCodes),
+        },
+      });
+      await prisma.auditLog.create({
+        data: {
+          actor: current.email,
+          actorRole: `${current.identityType} (${current.role})`,
+          action: "MFA_ENROLLED",
+          objectType: "User",
+          objectId: current.userId,
+          summary: `Enrolled TOTP authenticator MFA for ${current.email}`,
+        },
+      });
+      return NextResponse.json({
+        ok: true,
+        mfaEnrolled: true,
+        enrollment: {
+          secret: enrolled.secret,
+          otpauthUri: enrolled.otpauthUri,
+          recoveryCodes: enrolled.recoveryCodes,
+        },
+      });
+    }
+
+    // 4c. Disable MFA for signed-in user (refused if workspace policy requires MFA)
+    if (action === "disable_mfa") {
+      const current = await getActiveServerSession(req);
+      if (!current) {
+        return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+      }
+      const acctRow = await prisma.appSetting.findUnique({
+        where: { key: "account_settings" },
+      });
+      if (acctRow?.valueJson) {
+        try {
+          const acct = JSON.parse(acctRow.valueJson);
+          if (
+            (current.identityType === "coworker" && acct.requireMfaCoworkers) ||
+            (current.identityType === "partner" && acct.requireMfaPartners)
+          ) {
+            return NextResponse.json(
+              {
+                error:
+                  "Cannot disable MFA while workspace policy requires MFA for your role.",
+              },
+              { status: 400 }
+            );
+          }
+        } catch {
+          // ignore
+        }
+      }
+      await prisma.user.update({
+        where: { id: current.userId },
+        data: {
+          mfaSecret: null,
+          recoveryCodesJson: "[]",
+        },
+      });
+      await prisma.auditLog.create({
+        data: {
+          actor: current.email,
+          actorRole: `${current.identityType} (${current.role})`,
+          action: "MFA_DISABLED",
+          objectType: "User",
+          objectId: current.userId,
+          summary: `Disabled TOTP authenticator MFA for ${current.email}`,
+        },
+      });
+      return NextResponse.json({ ok: true, mfaEnrolled: false });
+    }
+
     // 5. Standard Login (Coworker or Partner User) with IP + Email Rate Limit (§16.2 S3, S5, S6, S7, S13)
     const surface = body.identityType === "partner" ? "partner" : "coworker";
     const clientIp =
@@ -347,6 +441,7 @@ export async function POST(req: NextRequest) {
       partnerId: authResult.user.partnerId,
       partnerName: authResult.user.partnerName,
       impersonatingPartnerId: null,
+      mfaEnrolled: Boolean(userRow.mfaSecret),
       mfaVerified: true,
       issuedAt: Date.now(),
       expiresAt: expiresAt.getTime(),

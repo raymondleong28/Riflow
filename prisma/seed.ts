@@ -3,6 +3,7 @@ import {
   normalizeRewardRule,
   generateRewardsFromPartnerLevel,
   generateRandomLeadFormToken,
+  DEFAULT_COMMISSION_TEMPLATES,
   toMinorUnits,
 } from "../src/lib/prmEngine";
 import { encryptBankDetails } from "../src/lib/connectors";
@@ -172,10 +173,45 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
     ]
   );
 
+  // Seed coworker User rows first so ownerId / assignedToId foreign keys are populated on demo records
+  const coworkerUsers = [
+    {
+      email: "alex@r-prm.example.com",
+      name: "Alex Morgan",
+      role: "Administrator",
+    },
+    {
+      email: "sarah@r-prm.example.com",
+      name: "Sarah Jenkins",
+      role: "Manager",
+    },
+    {
+      email: "marcus@r-prm.example.com",
+      name: "Marcus Vance",
+      role: "Manager",
+    },
+  ];
+  const userIdByName: Record<string, string> = {};
+  for (const cw of coworkerUsers) {
+    const createdCw = await prisma.user.create({
+      data: {
+        email: cw.email,
+        name: cw.name,
+        identityType: "coworker",
+        role: cw.role,
+        passwordHash: hashPasswordWithRandomSalt(adminPassword),
+        status: "Active",
+        isTestAccount: true,
+      },
+    });
+    userIdByName[cw.name] = createdCw.id;
+  }
+
   const prog1 = await prisma.program.create({
     data: {
       id: "prog-strategic",
       name: "R-Cloud Strategic Solution Partners",
+      ownerId: userIdByName["Alex Morgan"],
       owner: "Alex Morgan",
       onboardingPipelineId: "Strategic Partner",
       levelsJson: defaultLevels,
@@ -201,6 +237,7 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
     data: {
       id: "prog-referral",
       name: "Global Affiliate & Referral Network",
+      ownerId: userIdByName["Sarah Jenkins"],
       owner: "Sarah Jenkins",
       onboardingPipelineId: "Fast-Track Referral",
       levelsJson: defaultLevels,
@@ -226,6 +263,7 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
     data: {
       id: "prog-tech",
       name: "ISV & Technology Ecosystem Program",
+      ownerId: userIdByName["Marcus Vance"],
       owner: "Marcus Vance",
       onboardingPipelineId: "Strategic Partner",
       levelsJson: defaultLevels,
@@ -488,6 +526,8 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
     await prisma.partner.create({
       data: {
         ...p,
+        ownerId: userIdByName[p.owner] || null,
+        portalAccess: p.status === "Active" || p.status === "Onboarding",
         pendingRewardsAll: toMinorUnits(p.pendingRewardsAll),
         sourcedRevenue365d: toMinorUnits(p.sourcedRevenue365d),
         influencedRev365d: toMinorUnits(p.influencedRev365d),
@@ -672,7 +712,12 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
   ];
 
   for (const l of leadsData) {
-    await prisma.lead.create({ data: l });
+    await prisma.lead.create({
+      data: {
+        ...l,
+        ownerId: userIdByName[l.owner] || null,
+      },
+    });
   }
 
   // Deals across the 10 Kanban stages
@@ -910,11 +955,13 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
   ];
 
   for (const d of dealsData) {
+    const { amountSgd, ...dealRest } = d;
     await prisma.deal.create({
       data: {
-        ...d,
+        ...dealRest,
+        ownerId: userIdByName[d.owner] || null,
         amount: toMinorUnits(d.amount),
-        amountSgd: toMinorUnits(d.amountSgd),
+        amountBase: toMinorUnits(amountSgd),
         lineItemsJson: JSON.stringify([
           { id: "li-1", product: "R-PRM Core Platform License", qty: 1, unitPrice: d.amount * 0.8, total: d.amount * 0.8 },
           { id: "li-2", product: "Dedicated Onboarding & API Integration", qty: 1, unitPrice: d.amount * 0.2, total: d.amount * 0.2 },
@@ -923,30 +970,30 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
     });
   }
 
-  // Customers (revenuesSgd stored in minor units / cents)
+  // Customers (revenuesBase stored in minor units / cents)
   await prisma.customer.createMany({
     data: [
-      { id: "cust-1", name: "Solaris Luxury Resort Group", email: "billing@solarisresorts.example.com", status: "Paying", source: "Deal Conversion", sourcePartnerName: "Apex Cloud Solutions Pte Ltd", becamePayingDate: "2026-11-02", bbid: "BB-2041", sourceDealId: "deal-1", subscriptionPlan: "Enterprise Multi-Region", billingFrequency: "Yearly", billingPeriod: "12 Months", transactionsCount: 3, revenuesSgd: toMinorUnits(28500) },
-      { id: "cust-2", name: "UrbanPulse Holdings", email: "finance@urbanpulse.example.com", status: "Paying", source: "Deal Conversion", sourcePartnerName: "NovaBridge Digital Systems", becamePayingDate: "2026-10-24", bbid: "BB-2042", sourceDealId: "deal-2", subscriptionPlan: "Enterprise Annual", billingFrequency: "Yearly", billingPeriod: "12 Months", transactionsCount: 2, revenuesSgd: toMinorUnits(19200) },
-      { id: "cust-3", name: "Emerald Bay Retail Group", email: "ap@emeraldbay.example.com", status: "Paying", source: "Inbound Referral Link", sourcePartnerName: "BluePeak Commerce Advisory", becamePayingDate: "2026-08-15", bbid: "BB-1988", sourceDealId: "deal-3", subscriptionPlan: "Growth Pro Annual", billingFrequency: "Quarterly", billingPeriod: "3 Months", transactionsCount: 4, revenuesSgd: toMinorUnits(16400) },
-      { id: "cust-4", name: "Kuala Lumpur Gourmet Group", email: "accounts@klgourmet.example.com", status: "Paying", source: "Deal Conversion", sourcePartnerName: "Synthetix POS & Retail Tech", becamePayingDate: "2026-07-01", bbid: "BB-1950", sourceDealId: "deal-4", subscriptionPlan: "Growth Pro Annual", billingFrequency: "Yearly", billingPeriod: "12 Months", transactionsCount: 2, revenuesSgd: toMinorUnits(12600) },
-      { id: "cust-5", name: "Caspian Logistics & Retail", email: "billing@caspian.example.com", status: "Canceled", source: "Partner Registration", sourcePartnerName: "Stratos FinTech Integrations", becamePayingDate: "2026-03-10", canceledDate: "2026-10-01", bbid: "BB-1812", sourceDealId: "", subscriptionPlan: "Starter Monthly", billingFrequency: "Monthly", billingPeriod: "1 Month", transactionsCount: 6, revenuesSgd: toMinorUnits(5400) },
+      { id: "cust-1", name: "Solaris Luxury Resort Group", email: "billing@solarisresorts.example.com", status: "Paying", source: "Deal Conversion", sourcePartnerName: "Apex Cloud Solutions Pte Ltd", becamePayingDate: "2026-11-02", bbid: "BB-2041", sourceDealId: "deal-1", subscriptionPlan: "Enterprise Multi-Region", billingFrequency: "Yearly", billingPeriod: "12 Months", transactionsCount: 3, revenuesBase: toMinorUnits(28500) },
+      { id: "cust-2", name: "UrbanPulse Holdings", email: "finance@urbanpulse.example.com", status: "Paying", source: "Deal Conversion", sourcePartnerName: "NovaBridge Digital Systems", becamePayingDate: "2026-10-24", bbid: "BB-2042", sourceDealId: "deal-2", subscriptionPlan: "Enterprise Annual", billingFrequency: "Yearly", billingPeriod: "12 Months", transactionsCount: 2, revenuesBase: toMinorUnits(19200) },
+      { id: "cust-3", name: "Emerald Bay Retail Group", email: "ap@emeraldbay.example.com", status: "Paying", source: "Inbound Referral Link", sourcePartnerName: "BluePeak Commerce Advisory", becamePayingDate: "2026-08-15", bbid: "BB-1988", sourceDealId: "deal-3", subscriptionPlan: "Growth Pro Annual", billingFrequency: "Quarterly", billingPeriod: "3 Months", transactionsCount: 4, revenuesBase: toMinorUnits(16400) },
+      { id: "cust-4", name: "Kuala Lumpur Gourmet Group", email: "accounts@klgourmet.example.com", status: "Paying", source: "Deal Conversion", sourcePartnerName: "Synthetix POS & Retail Tech", becamePayingDate: "2026-07-01", bbid: "BB-1950", sourceDealId: "deal-4", subscriptionPlan: "Growth Pro Annual", billingFrequency: "Yearly", billingPeriod: "12 Months", transactionsCount: 2, revenuesBase: toMinorUnits(12600) },
+      { id: "cust-5", name: "Caspian Logistics & Retail", email: "billing@caspian.example.com", status: "Canceled", source: "Partner Registration", sourcePartnerName: "Stratos FinTech Integrations", becamePayingDate: "2026-03-10", canceledDate: "2026-10-01", bbid: "BB-1812", sourceDealId: "", subscriptionPlan: "Starter Monthly", billingFrequency: "Monthly", billingPeriod: "1 Month", transactionsCount: 6, revenuesBase: toMinorUnits(5400) },
     ],
   });
 
   // Transactions across recent months for 12-month stacked bar chart (stored in minor units / cents)
   await prisma.transaction.createMany({
     data: [
-      { id: "tx-1", name: "INV-2026-901 · Solaris Annual License", amount: toMinorUnits(28500), currency: "SGD", amountSgd: toMinorUnits(28500), partnerName: "Apex Cloud Solutions Pte Ltd", customerName: "Solaris Luxury Resort Group", dealName: "ENT - Solaris Luxury Resort Group (Annual)", monthKey: "11/2026" },
-      { id: "tx-2", name: "INV-2026-884 · UrbanPulse Annual Subscription", amount: toMinorUnits(19200), currency: "SGD", amountSgd: toMinorUnits(19200), partnerName: "NovaBridge Digital Systems", customerName: "UrbanPulse Holdings", dealName: "ENT - UrbanPulse Fitness Clubs APAC", monthKey: "10/2026" },
-      { id: "tx-3", name: "INV-2026-842 · Emerald Bay Q4 Renewal", amount: toMinorUnits(6000), currency: "USD", amountSgd: toMinorUnits(8100), partnerName: "BluePeak Commerce Advisory", customerName: "Emerald Bay Retail Group", dealName: "MM - Artisan Bakers Collective (15 Outlets)", monthKey: "09/2026" },
-      { id: "tx-4", name: "INV-2026-790 · KL Gourmet POS Suite", amount: toMinorUnits(42000), currency: "MYR", amountSgd: toMinorUnits(12600), partnerName: "Synthetix POS & Retail Tech", customerName: "Kuala Lumpur Gourmet Group", dealName: "POS - Nectar Tearooms Regional Expansion", monthKey: "08/2026" },
-      { id: "tx-5", name: "INV-2026-731 · Emerald Bay Q3 Subscription", amount: toMinorUnits(6150), currency: "USD", amountSgd: toMinorUnits(8300), partnerName: "BluePeak Commerce Advisory", customerName: "Emerald Bay Retail Group", dealName: "MM - Artisan Bakers Collective (15 Outlets)", monthKey: "07/2026" },
-      { id: "tx-6", name: "INV-2026-688 · Stratos FinTech Add-on Pack", amount: toMinorUnits(5400), currency: "SGD", amountSgd: toMinorUnits(5400), partnerName: "Stratos FinTech Integrations", customerName: "Caspian Logistics & Retail", dealName: "MM - Botanica Skincare Flagship Chain", monthKey: "06/2026" },
+      { id: "tx-1", name: "INV-2026-901 · Solaris Annual License", amount: toMinorUnits(28500), currency: "SGD", amountBase: toMinorUnits(28500), partnerName: "Apex Cloud Solutions Pte Ltd", customerName: "Solaris Luxury Resort Group", dealName: "ENT - Solaris Luxury Resort Group (Annual)", monthKey: "11/2026" },
+      { id: "tx-2", name: "INV-2026-884 · UrbanPulse Annual Subscription", amount: toMinorUnits(19200), currency: "SGD", amountBase: toMinorUnits(19200), partnerName: "NovaBridge Digital Systems", customerName: "UrbanPulse Holdings", dealName: "ENT - UrbanPulse Fitness Clubs APAC", monthKey: "10/2026" },
+      { id: "tx-3", name: "INV-2026-842 · Emerald Bay Q4 Renewal", amount: toMinorUnits(6000), currency: "USD", amountBase: toMinorUnits(8100), partnerName: "BluePeak Commerce Advisory", customerName: "Emerald Bay Retail Group", dealName: "MM - Artisan Bakers Collective (15 Outlets)", monthKey: "09/2026" },
+      { id: "tx-4", name: "INV-2026-790 · KL Gourmet POS Suite", amount: toMinorUnits(42000), currency: "MYR", amountBase: toMinorUnits(12600), partnerName: "Synthetix POS & Retail Tech", customerName: "Kuala Lumpur Gourmet Group", dealName: "POS - Nectar Tearooms Regional Expansion", monthKey: "08/2026" },
+      { id: "tx-5", name: "INV-2026-731 · Emerald Bay Q3 Subscription", amount: toMinorUnits(6150), currency: "USD", amountBase: toMinorUnits(8300), partnerName: "BluePeak Commerce Advisory", customerName: "Emerald Bay Retail Group", dealName: "MM - Artisan Bakers Collective (15 Outlets)", monthKey: "07/2026" },
+      { id: "tx-6", name: "INV-2026-688 · Stratos FinTech Add-on Pack", amount: toMinorUnits(5400), currency: "SGD", amountBase: toMinorUnits(5400), partnerName: "Stratos FinTech Integrations", customerName: "Caspian Logistics & Retail", dealName: "MM - Botanica Skincare Flagship Chain", monthKey: "06/2026" },
     ],
   });
 
-  // Generate rewards directly from each Partner's actual Program Level rules (§13.1, §14.1, §16.4 P1)
+  // Generate rewards directly from each Partner's actual Program Level rules
   // Create Payouts first, then link Rewards via real `payoutId` foreign key and compute Payout amounts from linked rewards!
   await prisma.payout.createMany({
     data: [
@@ -957,7 +1004,7 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
         partnerName: "Synthetix POS & Retail Tech",
         amount: toMinorUnits(3780),
         currency: "SGD",
-        amountSgd: toMinorUnits(3780),
+        amountBase: toMinorUnits(3780),
         periodFrom: "2026-08-01",
         periodTo: "2026-11-15",
         rewardsCount: 2,
@@ -972,7 +1019,7 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
         partnerName: "Stratos FinTech Integrations",
         amount: toMinorUnits(972),
         currency: "SGD",
-        amountSgd: toMinorUnits(972),
+        amountBase: toMinorUnits(972),
         periodFrom: "2026-06-01",
         periodTo: "2026-09-30",
         rewardsCount: 1,
@@ -1002,7 +1049,9 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
         partnerName: tx.partnerName,
       },
       partner,
-      seededPrograms
+      seededPrograms,
+      undefined,
+      "SGD"
     );
     for (const g of generated) {
       const rewardNumber = `RW-${seq--}`;
@@ -1016,7 +1065,7 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
           type: g.type,
           amount: g.amountMinor,
           currency: g.currency,
-          amountSgd: g.amountSgdMinor,
+          amountBase: g.amountBaseMinor,
           fromActivity: g.fromActivity,
           fromRewardRule: g.fromRewardRule,
           status: isPaidTx ? "Paid" : isBatchReadyTx ? "Accepted" : "Pending",
@@ -1030,38 +1079,6 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
         },
       });
     }
-  }
-
-  // §16.2 S5, S6, S7 & §16.3 G10: Seed `User` rows with per-user random salt scrypt hashes from .env
-  const coworkerUsers = [
-    {
-      email: "alex@r-prm.example.com",
-      name: "Alex Morgan",
-      role: "Administrator",
-    },
-    {
-      email: "sarah@r-prm.example.com",
-      name: "Sarah Jenkins",
-      role: "Manager",
-    },
-    {
-      email: "marcus@r-prm.example.com",
-      name: "Marcus Vance",
-      role: "Manager",
-    },
-  ];
-  for (const cw of coworkerUsers) {
-    await prisma.user.create({
-      data: {
-        email: cw.email,
-        name: cw.name,
-        identityType: "coworker",
-        role: cw.role,
-        passwordHash: hashPasswordWithRandomSalt(adminPassword),
-        status: "Active",
-        isTestAccount: true,
-      },
-    });
   }
 
   // Partner Users (Main Contacts + PartnerTeamMembers)
@@ -1155,20 +1172,20 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
   // Tasks
   await prisma.task.createMany({
     data: [
-      { id: "tsk-1", name: "Review Q4 Joint Marketing Plan with Apex Cloud", status: "Due Today", type: "Review", dueDate: "2026-11-24", dueTime: "02:00 PM", description: "Finalize co-branded webinar budget and target account list.", assignedTo: "Alex Morgan", associationType: "Partner", associationName: "Apex Cloud Solutions Pte Ltd", createdBy: "Alex Morgan" },
-      { id: "tsk-2", name: "Complete Technical Certification Sandbox Walkthrough", status: "Upcoming", type: "Onboarding", dueDate: "2026-11-28", dueTime: "10:30 AM", description: "Guide Vanguard Enterprise Matrix engineering team through webhook auth.", assignedTo: "Sarah Jenkins", associationType: "Partner", associationName: "Vanguard Enterprise Matrix", createdBy: "Alex Morgan" },
-      { id: "tsk-3", name: "Follow up on Velvet & Vine Lead Acceptance", status: "Overdue", type: "Follow-up", dueDate: "2026-11-21", dueTime: "09:00 AM", description: "Verify store count and Shopify POS integration timeline.", assignedTo: "Alex Morgan", associationType: "Lead", associationName: "Nadia Khoury · Velvet & Vine", createdBy: "Sarah Jenkins" },
-      { id: "tsk-4", name: "Prepare Final Order Form for Artisan Bakers Collective", status: "Upcoming", type: "Call", dueDate: "2026-11-29", dueTime: "04:00 PM", description: "Include 15-outlet annual discount tier.", assignedTo: "Alex Morgan", associationType: "Deal", associationName: "MM - Artisan Bakers Collective (15 Outlets)", createdBy: "Alex Morgan" },
-      { id: "tsk-5", name: "Verify Bank & Tax Details for NovaBridge Payout", status: "Completed", type: "Review", dueDate: "2026-11-15", dueTime: "11:00 AM", description: "Confirmed SWIFT code and GST registration.", assignedTo: "Marcus Vance", associationType: "Partner", associationName: "NovaBridge Digital Systems", createdBy: "Alex Morgan", completedBy: "Marcus Vance", completedDate: "2026-11-15" },
+      { id: "tsk-1", name: "Review Q4 Joint Marketing Plan with Apex Cloud", status: "Due Today", type: "Review", dueDate: "2026-11-24", dueTime: "02:00 PM", description: "Finalize co-branded webinar budget and target account list.", assignedToId: userIdByName["Alex Morgan"], assignedTo: "Alex Morgan", associationType: "Partner", associationName: "Apex Cloud Solutions Pte Ltd", createdBy: "Alex Morgan" },
+      { id: "tsk-2", name: "Complete Technical Certification Sandbox Walkthrough", status: "Upcoming", type: "Onboarding", dueDate: "2026-11-28", dueTime: "10:30 AM", description: "Guide Vanguard Enterprise Matrix engineering team through webhook auth.", assignedToId: userIdByName["Sarah Jenkins"], assignedTo: "Sarah Jenkins", associationType: "Partner", associationName: "Vanguard Enterprise Matrix", createdBy: "Alex Morgan" },
+      { id: "tsk-3", name: "Follow up on Velvet & Vine Lead Acceptance", status: "Overdue", type: "Follow-up", dueDate: "2026-11-21", dueTime: "09:00 AM", description: "Verify store count and Shopify POS integration timeline.", assignedToId: userIdByName["Alex Morgan"], assignedTo: "Alex Morgan", associationType: "Lead", associationName: "Nadia Khoury · Velvet & Vine", createdBy: "Sarah Jenkins" },
+      { id: "tsk-4", name: "Prepare Final Order Form for Artisan Bakers Collective", status: "Upcoming", type: "Call", dueDate: "2026-11-29", dueTime: "04:00 PM", description: "Include 15-outlet annual discount tier.", assignedToId: userIdByName["Alex Morgan"], assignedTo: "Alex Morgan", associationType: "Deal", associationName: "MM - Artisan Bakers Collective (15 Outlets)", createdBy: "Alex Morgan" },
+      { id: "tsk-5", name: "Verify Bank & Tax Details for NovaBridge Payout", status: "Completed", type: "Review", dueDate: "2026-11-15", dueTime: "11:00 AM", description: "Confirmed SWIFT code and GST registration.", assignedToId: userIdByName["Marcus Vance"], assignedTo: "Marcus Vance", associationType: "Partner", associationName: "NovaBridge Digital Systems", createdBy: "Alex Morgan", completedBy: "Marcus Vance", completedDate: "2026-11-15" },
     ],
   });
 
-  // Business Plans (targetRevSgd stored in minor units / cents)
+  // Business Plans (targetRevBase stored in minor units / cents)
   await prisma.businessPlan.createMany({
     data: [
-      { id: "bp-1", name: "FY2026 APAC Enterprise Hospitality Expansion", partnerName: "Apex Cloud Solutions Pte Ltd", partnerOwner: "Alex Morgan", status: "Active", description: "Target 15 multi-property hotel and resort groups across Singapore, Thailand, and Bali.", startDate: "2026-01-01", endDate: "2026-12-31", achievedPct: 84, targetRevSgd: toMinorUnits(100000) },
-      { id: "bp-2", name: "H2 2026 Omnichannel F&B POS Bundling Initiative", partnerName: "Synthetix POS & Retail Tech", partnerOwner: "Marcus Vance", status: "Active", description: "Bundle R-PRM loyalty engine with every new Synthetix POS multi-outlet deployment.", startDate: "2026-07-01", endDate: "2026-12-31", achievedPct: 68, targetRevSgd: toMinorUnits(85000) },
-      { id: "bp-3", name: "FY2027 UK & Europe Channel Launch Plan", partnerName: "Vanguard Enterprise Matrix", partnerOwner: "Alex Morgan", status: "Draft", description: "Establish initial 10 reference customers in UK specialty retail.", startDate: "2027-01-01", endDate: "2027-12-31", achievedPct: 15, targetRevSgd: toMinorUnits(120000) },
+      { id: "bp-1", name: "FY2026 APAC Enterprise Hospitality Expansion", partnerName: "Apex Cloud Solutions Pte Ltd", partnerOwner: "Alex Morgan", status: "Active", description: "Target 15 multi-property hotel and resort groups across Singapore, Thailand, and Bali.", startDate: "2026-01-01", endDate: "2026-12-31", achievedPct: 84, targetRevBase: toMinorUnits(100000) },
+      { id: "bp-2", name: "H2 2026 Omnichannel F&B POS Bundling Initiative", partnerName: "Synthetix POS & Retail Tech", partnerOwner: "Marcus Vance", status: "Active", description: "Bundle R-PRM loyalty engine with every new Synthetix POS multi-outlet deployment.", startDate: "2026-07-01", endDate: "2026-12-31", achievedPct: 68, targetRevBase: toMinorUnits(85000) },
+      { id: "bp-3", name: "FY2027 UK & Europe Channel Launch Plan", partnerName: "Vanguard Enterprise Matrix", partnerOwner: "Alex Morgan", status: "Draft", description: "Establish initial 10 reference customers in UK specialty retail.", startDate: "2027-01-01", endDate: "2027-12-31", achievedPct: 15, targetRevBase: toMinorUnits(120000) },
     ],
   });
 
@@ -1186,10 +1203,10 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
 
   await prisma.collaboration.createMany({
     data: [
-      { id: "col-1", name: "Co-Sell: Aura Luxury Warm Intro & Executive Demo", status: "Accepted", owner: "Alex Morgan", partnerName: "Apex Cloud Solutions Pte Ltd", assignedContact: "Jordan Lee", accountName: "Aura Luxury Hospitality Group", lastActivityDate: "2026-11-22" },
-      { id: "col-2", name: "Joint Architecture Review: Vertex Omnichannel POS", status: "Accepted", owner: "Alex Morgan", partnerName: "Apex Cloud Solutions Pte Ltd", assignedContact: "Darren Koh", accountName: "Vertex Retail Corp", lastActivityDate: "2026-11-21" },
-      { id: "col-3", name: "POS Migration Bundle: Zenith 31 Stores", status: "New", owner: "Marcus Vance", partnerName: "Synthetix POS & Retail Tech", assignedContact: "Aisha Rahman", accountName: "Zenith Activewear APAC", lastActivityDate: "2026-11-23" },
-      { id: "col-4", name: "Payment Gateway Co-Pitch: Solstice Grocers", status: "Closed", owner: "Sarah Jenkins", partnerName: "Stratos FinTech Integrations", assignedContact: "Chloe Goh", accountName: "Solstice Gourmet Grocers", lastActivityDate: "2026-11-10" },
+      { id: "col-1", name: "Co-Sell: Aura Luxury Warm Intro & Executive Demo", status: "Accepted", ownerId: userIdByName["Alex Morgan"], owner: "Alex Morgan", partnerName: "Apex Cloud Solutions Pte Ltd", assignedContact: "Jordan Lee", accountName: "Aura Luxury Hospitality Group", lastActivityDate: "2026-11-22" },
+      { id: "col-2", name: "Joint Architecture Review: Vertex Omnichannel POS", status: "Accepted", ownerId: userIdByName["Alex Morgan"], owner: "Alex Morgan", partnerName: "Apex Cloud Solutions Pte Ltd", assignedContact: "Darren Koh", accountName: "Vertex Retail Corp", lastActivityDate: "2026-11-21" },
+      { id: "col-3", name: "POS Migration Bundle: Zenith 31 Stores", status: "New", ownerId: userIdByName["Marcus Vance"], owner: "Marcus Vance", partnerName: "Synthetix POS & Retail Tech", assignedContact: "Aisha Rahman", accountName: "Zenith Activewear APAC", lastActivityDate: "2026-11-23" },
+      { id: "col-4", name: "Payment Gateway Co-Pitch: Solstice Grocers", status: "Closed", ownerId: userIdByName["Sarah Jenkins"], owner: "Sarah Jenkins", partnerName: "Stratos FinTech Integrations", assignedContact: "Chloe Goh", accountName: "Solstice Gourmet Grocers", lastActivityDate: "2026-11-10" },
     ],
   });
 
@@ -1201,12 +1218,12 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
     ],
   });
 
-  // Tracking Links (revenuesSgd stored in minor units / cents)
+  // Tracking Links (revenuesBase stored in minor units / cents)
   await prisma.trackingLink.createMany({
     data: [
-      { id: "lnk-1", name: "Main Enterprise Solution Landing Page", targetUrl: "https://r-prm.example.com/enterprise?utm_source=partner", programId: prog1.id, partnerName: "Apex Cloud Solutions Pte Ltd", uniqueVisitors: 1280, leadsCount: 24, customersCount: 8, transactionsCount: 16, revenuesSgd: toMinorUnits(64200) },
-      { id: "lnk-2", name: "Interactive ROI Calculator Referral Link", targetUrl: "https://r-prm.example.com/roi-calculator?utm_source=referral", programId: prog2.id, partnerName: "BluePeak Commerce Advisory", uniqueVisitors: 840, leadsCount: 19, customersCount: 5, transactionsCount: 9, revenuesSgd: toMinorUnits(32800) },
-      { id: "lnk-3", name: "POS Integration Marketplace Listing", targetUrl: "https://r-prm.example.com/integrations/synthetix", programId: prog3.id, partnerName: "Synthetix POS & Retail Tech", uniqueVisitors: 615, leadsCount: 14, customersCount: 6, transactionsCount: 12, revenuesSgd: toMinorUnits(41500) },
+      { id: "lnk-1", name: "Main Enterprise Solution Landing Page", targetUrl: "https://r-prm.example.com/enterprise?utm_source=partner", programId: prog1.id, partnerName: "Apex Cloud Solutions Pte Ltd", uniqueVisitors: 1280, leadsCount: 24, customersCount: 8, transactionsCount: 16, revenuesBase: toMinorUnits(64200) },
+      { id: "lnk-2", name: "Interactive ROI Calculator Referral Link", targetUrl: "https://r-prm.example.com/roi-calculator?utm_source=referral", programId: prog2.id, partnerName: "BluePeak Commerce Advisory", uniqueVisitors: 840, leadsCount: 19, customersCount: 5, transactionsCount: 9, revenuesBase: toMinorUnits(32800) },
+      { id: "lnk-3", name: "POS Integration Marketplace Listing", targetUrl: "https://r-prm.example.com/integrations/synthetix", programId: prog3.id, partnerName: "Synthetix POS & Retail Tech", uniqueVisitors: 615, leadsCount: 14, customersCount: 6, transactionsCount: 12, revenuesBase: toMinorUnits(41500) },
     ],
   });
 
@@ -1283,6 +1300,14 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
       // 15. API Access Tokens (Settings -> Integration)
       { category: "api_tokens", name: "Production HubSpot Middleware Token", subtitle: "rprm_live_98a7f...31c · Created Oct 12, 2026 by Alex Morgan · Last used 5 mins ago", status: "Active", metadataJson: JSON.stringify({ scopes: "deals:write, leads:write, partners:read" }) },
       { category: "api_tokens", name: "Data Warehouse BI Reporting Key", subtitle: "rprm_live_44b1e...09d · Created Sep 01, 2026 by Sarah Jenkins · Last used 1 hour ago", status: "Active", metadataJson: JSON.stringify({ scopes: "read:all" }) },
+      // 16. Editable Commission Rule Templates (§3.5.2)
+      ...Object.values(DEFAULT_COMMISSION_TEMPLATES).map((tpl) => ({
+        category: "commission_templates",
+        name: tpl.title,
+        subtitle: `${tpl.amountMode} · ${tpl.duration}`,
+        status: "Active",
+        metadataJson: JSON.stringify({ ...tpl, currency: "SGD" }),
+      })),
     ],
   });
 
@@ -1317,10 +1342,21 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
       key: "account_settings",
       valueJson: JSON.stringify({
         accountName: "R-Cloud Enterprise PRM",
+        workspaceId: "ws_r_cloud_demo",
         workspaceSlug: "r-cloud-global",
+        logoText: "RC",
         timezone: "Asia/Singapore (GMT+08:00)",
         mainCurrency: "SGD",
         multiCurrency: true,
+        defaultOwnerId: userIdByName["Alex Morgan"],
+        defaultOwnerName: "Alex Morgan",
+        legalEntityName: "R-Cloud Enterprise Pte Ltd",
+        taxId: "SG-202600112Z",
+        billingAddress: "10 Marina Boulevard, Singapore",
+        leadConsentText:
+          "I confirm I have obtained permission from this prospect to share their business contact details with {{workspace.name}}.",
+        leadConsentTermsLabel: "Terms & Privacy Policy",
+        leadConsentTermsUrl: "https://r-prm.example.com/legal/privacy",
         portalDomain: "https://partners.r-cloud.example.com",
         primaryColor: "#2563EB",
         directorySubdomain: "r-cloud",
@@ -1336,8 +1372,8 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
         conflictDetection: "Warn on duplicate email or company domain across Leads, Deals, and Customers",
         validationStrategy: "Partner Owner or Administrator",
         autoPayoutSchedule: "Monthly (1st business day)",
-        autoPayoutThresholdSgd: 250,
-        payoutProviders: ["Wise", "Stripe", "PayPal", "Payoneer"],
+        autoPayoutThresholdBase: 250,
+        payoutProviders: ["Manual"],
         selfInvoicingEnabled: true,
       }),
     },
@@ -1375,7 +1411,7 @@ export async function seedDatabase(options?: { forceReset?: boolean }) {
 if (require.main === module) {
   seedDatabase()
     .then(async () => {
-      console.log("R-PRM SQLite database seeded with synthetic data.");
+      console.log("R-PRM PostgreSQL database seeded with synthetic demo data.");
       await prisma.$disconnect();
     })
     .catch(async (e) => {

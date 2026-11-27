@@ -10,6 +10,7 @@ import {
   NotesAndActivitiesTab,
   DEAL_STAGES_10,
 } from "@/components/SharedEngines";
+import { SUPPORTED_CURRENCIES } from "@/lib/prmEngine";
 import { UserCheck, RefreshCw, Plus, Trash2 } from "lucide-react";
 
 const DEAL_TABS = [
@@ -21,28 +22,54 @@ const DEAL_TABS = [
 
 export default function DealDetailPage() {
   const params = useParams();
-  const id = String(params?.id || "deal-1");
-  const { deals, partners, transactions, manageItems, mutate, showToast } =
-    usePrm();
+  const id = String(params?.id || "");
+  const {
+    deals,
+    partners,
+    transactions,
+    manageItems,
+    settings,
+    loading,
+    mutate,
+    showToast,
+  } = usePrm();
 
-  const deal = deals.find((d) => d.id === id) || deals[0];
+  const baseCurrency =
+    settings?.account_settings?.mainCurrency || SUPPORTED_CURRENCIES[0];
+
+  // §1.4 & §3.5.1: Never fall back to deal-1 or deals[0]
+  const deal = deals.find((d) => d.id === id);
+
   const [activeTab, setActiveTab] = useState<(typeof DEAL_TABS)[number]>(
     "Activities & Notes"
   );
 
-  // Add Line Item Form State
   const productsCatalog = manageItems.filter((m) => m.category === "products");
-  const [selectedProduct, setSelectedProduct] = useState(
-    "R-PRM Enterprise Multi-Region Platform"
-  );
+  const [selectedProduct, setSelectedProduct] = useState("");
   const [itemQty, setItemQty] = useState("1");
-  const [itemPrice, setItemPrice] = useState("12000");
+  const [itemPrice, setItemPrice] = useState("");
 
-  if (!deal) {
+  if (loading) {
     return <div className="p-8 text-sm text-slate-500">Loading deal...</div>;
   }
 
-  const partnerObj = partners.find((p) => p.name === deal.partnerName);
+  if (!deal) {
+    return (
+      <div className="max-w-xl mx-auto p-8 space-y-3">
+        <BackBreadcrumb href="/deals/views/all" label="Deals" />
+        <div className="p-6 bg-white rounded-xl border border-slate-200 text-sm text-slate-700">
+          <p className="font-bold text-slate-900">Deal not found</p>
+          <p className="text-xs text-slate-500 mt-1">
+            No deal record exists with ID <code>{id || "(empty)"}</code>.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const partnerObj = partners.find(
+    (p) => p.id === deal.partnerId || p.name === deal.partnerName
+  );
   const dealTransactions = transactions.filter((t) => t.dealName === deal.name);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,7 +85,7 @@ export default function DealDetailPage() {
       "UPDATE_DEAL_STAGE",
       { id: deal.id, stage: newStage },
       newStage === "Closed Won"
-        ? "Deal marked Closed Won! 18% Pending Commission Reward generated."
+        ? "Deal marked Closed Won and evaluated against partner tier commission rules!"
         : `Deal stage updated to ${newStage}`
     );
   };
@@ -66,12 +93,20 @@ export default function DealDetailPage() {
   const handleAddLineItem = async (e: React.FormEvent) => {
     e.preventDefault();
     const qty = Math.max(1, Number(itemQty) || 1);
-    const unitPrice = Number(itemPrice) || 5000;
+    const unitPrice = Number(itemPrice);
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      showToast("Enter a unit price greater than zero.");
+      return;
+    }
+    const prodLabel =
+      selectedProduct ||
+      productsCatalog[0]?.name ||
+      "Professional Services Package";
     const nextItems = [
       ...lineItems,
       {
         id: `li-${Date.now()}`,
-        product: selectedProduct,
+        product: prodLabel,
         qty,
         unitPrice,
         total: qty * unitPrice,
@@ -80,8 +115,9 @@ export default function DealDetailPage() {
     await mutate(
       "UPDATE_DEAL_LINE_ITEMS",
       { dealId: deal.id, lineItems: nextItems },
-      `Added "${selectedProduct}" to deal line items & recalculated total!`
+      `Added "${prodLabel}" to deal line items & recalculated total!`
     );
+    setItemPrice("");
   };
 
   const handleRemoveLineItem = async (lineItemId: string) => {
@@ -103,12 +139,18 @@ export default function DealDetailPage() {
             <StatusBadge status={deal.status} />
             <span className="text-xs text-slate-500">
               Source:{" "}
-              <Link
-                href={`/partners/${partnerObj?.id || "prt-1"}`}
-                className="text-blue-600 font-semibold hover:underline"
-              >
-                {deal.partnerName}
-              </Link>
+              {partnerObj ? (
+                <Link
+                  href={`/partners/${partnerObj.id}`}
+                  className="text-blue-600 font-semibold hover:underline"
+                >
+                  {deal.partnerName}
+                </Link>
+              ) : (
+                <span className="font-semibold text-slate-700">
+                  {deal.partnerName || "—"}
+                </span>
+              )}
             </span>
           </div>
         </div>
@@ -151,18 +193,20 @@ export default function DealDetailPage() {
             <div className="grid grid-cols-2 gap-y-2 gap-x-2">
               <span className="text-slate-500">Registered by</span>
               <span className="font-medium text-blue-700">
-                {deal.partnerName}
+                {deal.partnerName || "—"}
               </span>
 
               <span className="text-slate-500">Owner</span>
-              <span className="font-medium text-slate-900">{deal.owner}</span>
+              <span className="font-medium text-slate-900">
+                {deal.owner || "—"}
+              </span>
 
               <span className="text-slate-500">Stage</span>
               <span className="font-bold text-blue-700">{deal.stage}</span>
 
               <span className="text-slate-500">Program</span>
               <span className="font-medium text-slate-900">
-                {deal.programName}
+                {deal.programName || "—"}
               </span>
 
               <span className="text-slate-500">Total Amount</span>
@@ -170,40 +214,46 @@ export default function DealDetailPage() {
                 {deal.currency} {deal.amount.toLocaleString()}
               </span>
 
-              <span className="text-slate-500">Total Amount (SGD)</span>
+              <span className="text-slate-500">
+                Total Amount ({baseCurrency})
+              </span>
               <span className="font-extrabold text-blue-700">
-                SGD {deal.amountSgd.toLocaleString()}
+                {baseCurrency} {Number(deal.amountBase || 0).toLocaleString()}
               </span>
 
               <span className="text-slate-500">Deal Type</span>
-              <span className="font-medium text-slate-900">{deal.dealType}</span>
+              <span className="font-medium text-slate-900">
+                {deal.dealType || "—"}
+              </span>
 
               <span className="text-slate-500">Subscription Plan</span>
               <span className="font-medium text-slate-900">
-                {deal.subscriptionPlan}
+                {deal.subscriptionPlan || "—"}
               </span>
 
               <span className="text-slate-500">Expected close date</span>
-              <span className="font-medium text-slate-900">{deal.closeDate}</span>
+              <span className="font-medium text-slate-900">
+                {deal.closeDate || "—"}
+              </span>
 
               <span className="text-slate-500">Date entered stage</span>
               <span className="font-medium text-slate-900">
-                {deal.stageEnteredAt}
+                {deal.stageEnteredAt || "—"}
               </span>
 
               <span className="text-slate-500">Expiration date</span>
               <span className="font-medium text-slate-900">
-                {deal.expirationDate}
+                {deal.expirationDate || "—"}
               </span>
 
               <span className="text-slate-500">Contract start / end</span>
               <span className="font-medium text-slate-900">
-                {deal.contractStart} → {deal.contractEnd}
+                {deal.contractStart || "—"} → {deal.contractEnd || "—"}
               </span>
 
-              <span className="text-slate-500">HubSpot Deal ID</span>
+              <span className="text-slate-500">CRM Deal ID</span>
               <span className="font-medium text-slate-900">
-                {deal.hubspotDealId}
+                {deal.hubspotDealId || "—"}
               </span>
             </div>
           </div>
@@ -215,17 +265,17 @@ export default function DealDetailPage() {
             <p className="font-bold text-slate-900">{deal.company}</p>
             <p className="text-slate-600">Primary Contact: {deal.clientName}</p>
             <p className="text-slate-500">
-              Partner Representative: {deal.assignedContact}
+              Partner Representative: {deal.assignedContact || "—"}
             </p>
           </div>
 
           <div className="bg-white rounded-xl border border-blue-200 p-4 shadow-sm space-y-2">
             <div className="flex items-center justify-between">
               <span className="font-bold text-slate-900 text-sm">
-                HubSpot sync
+                CRM sync
               </span>
               <button
-                onClick={() => showToast("HubSpot deal sync logs: Synced")}
+                onClick={() => showToast("CRM deal sync logs checked")}
                 className="text-blue-600 hover:underline font-semibold flex items-center space-x-1"
               >
                 <RefreshCw className="w-3 h-3" />
@@ -233,14 +283,8 @@ export default function DealDetailPage() {
               </button>
             </div>
             <p className="text-slate-500">
-              Deal last sync date: 2026-11-24 09:15 SGT
+              Deal ID: {deal.hubspotDealId || "Not synced"}
             </p>
-            <button
-              onClick={() => showToast("Opened deal in HubSpot CRM")}
-              className="text-blue-600 font-semibold hover:underline"
-            >
-              View in HubSpot (deal) ↗
-            </button>
           </div>
         </div>
 
@@ -273,15 +317,21 @@ export default function DealDetailPage() {
                 </h3>
                 <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/40 flex items-center justify-between">
                   <div>
-                    <Link
-                      href={`/partners/${partnerObj?.id || "prt-1"}`}
-                      className="font-bold text-blue-700 hover:underline"
-                    >
-                      {deal.partnerName}
-                    </Link>
+                    {partnerObj ? (
+                      <Link
+                        href={`/partners/${partnerObj.id}`}
+                        className="font-bold text-blue-700 hover:underline"
+                      >
+                        {deal.partnerName}
+                      </Link>
+                    ) : (
+                      <span className="font-bold text-slate-900">
+                        {deal.partnerName || "—"}
+                      </span>
+                    )}
                     <p className="text-slate-500">
                       Role: Primary Sourced Partner · Contact:{" "}
-                      {deal.assignedContact}
+                      {deal.assignedContact || "—"}
                     </p>
                   </div>
                   <span className="px-2.5 py-1 rounded bg-blue-600 text-white font-bold">
@@ -306,7 +356,7 @@ export default function DealDetailPage() {
                       Product (from Manage &gt; Products catalog)
                     </label>
                     <select
-                      value={selectedProduct}
+                      value={selectedProduct || productsCatalog[0]?.name || ""}
                       onChange={(e) => setSelectedProduct(e.target.value)}
                       className="w-full px-3 py-1.5 border border-slate-300 rounded-lg bg-white"
                     >
@@ -315,8 +365,8 @@ export default function DealDetailPage() {
                           {prod.name}
                         </option>
                       ))}
-                      <option value="Custom Professional Services Package">
-                        Custom Professional Services Package
+                      <option value="Professional Services Package">
+                        Professional Services Package
                       </option>
                     </select>
                   </div>
@@ -336,9 +386,13 @@ export default function DealDetailPage() {
                       Unit Price ({deal.currency})
                     </label>
                     <input
+                      required
                       type="number"
+                      min="0.01"
+                      step="0.01"
                       value={itemPrice}
                       onChange={(e) => setItemPrice(e.target.value)}
+                      placeholder="Amount"
                       className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
                     />
                   </div>
@@ -430,7 +484,8 @@ export default function DealDetailPage() {
                         <p className="text-slate-500">Period: {tx.monthKey}</p>
                       </div>
                       <span className="font-bold text-blue-700">
-                        SGD {tx.amountSgd.toLocaleString()}
+                        {baseCurrency}{" "}
+                        {Number(tx.amountBase || 0).toLocaleString()}
                       </span>
                     </div>
                   ))

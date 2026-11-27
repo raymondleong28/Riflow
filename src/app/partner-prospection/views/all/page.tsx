@@ -9,16 +9,16 @@ import { ArrowRight } from "lucide-react";
 const PROSPECTION_COLUMNS = ["New", "Onboarding", "Active"] as const;
 
 export default function PartnerProspectionPage() {
-  const { partners, mutate, setGlobalModal, showToast } = usePrm();
+  const { partners, session, mutate, setGlobalModal, showToast } = usePrm();
   const [activeView, setActiveView] = useState("All");
   const [search, setSearch] = useState("");
 
   const filtered = partners.filter((p) => {
-    if (activeView === "My Prospects" && p.owner !== "Alex Morgan") return false;
-    if (
-      search &&
-      !p.name.toLowerCase().includes(search.toLowerCase())
-    ) {
+    // §3.5.1: Filter on the signed-in user's id
+    if (activeView === "My Prospects" && p.ownerId !== session?.userId) {
+      return false;
+    }
+    if (search && !p.name.toLowerCase().includes(search.toLowerCase())) {
       return false;
     }
     return true;
@@ -91,12 +91,12 @@ export default function PartnerProspectionPage() {
                       <StatusBadge status={p.status} />
                     </div>
                     <div className="text-slate-600 space-y-0.5">
-                      <p>Partner type: {p.partnerType}</p>
-                      <p>Program level: {p.qualifyingLevel}</p>
+                      <p>Partner type: {p.partnerType || "—"}</p>
+                      <p>Program level: {p.qualifyingLevel || "Standard"}</p>
                     </div>
                     <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
                       <span className="text-[11px] text-slate-400">
-                        Owner: {p.owner}
+                        Owner: {p.owner || "Unassigned"}
                       </span>
                       {col !== "Active" && (
                         <button
